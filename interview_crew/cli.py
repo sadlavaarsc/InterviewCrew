@@ -3,6 +3,15 @@ from interview_crew.graph import graph
 from interview_crew.state import InterviewState
 
 
+def merge_output(state: dict, output: dict) -> dict:
+    for key, value in output.items():
+        if isinstance(value, list) and key in state and isinstance(state[key], list):
+            state[key].extend(value)
+        else:
+            state[key] = value
+    return state
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--turns", type=int, default=6)
@@ -27,16 +36,20 @@ def main():
     }
 
     while state["status"] != "finished" and state["turn"] < state["max_turns"]:
+        last_question = ""
         for event in graph.stream(state, config={"recursion_limit": 50}):
             node_name, output = next(iter(event.items()))
-            state.update(output)
-            if state.get("last_question"):
-                print(f"\n[{state['current_agent'].upper()}] {state['last_question']}")
-                break
+            state = merge_output(state, output)  # type: ignore
+            if output.get("last_question"):
+                last_question = output["last_question"]
+
+        if last_question:
+            print(f"\n[{state['current_agent'].upper()}] {last_question}")
+
         if state["status"] == "finished" or state["turn"] >= state["max_turns"]:
             break
         user_input = input("你的回答: ")
-        state["candidate_response"] = user_input
+        state = merge_output(state, {"candidate_response": user_input})  # type: ignore
 
     print("\n=== 面试结束 ===")
 
