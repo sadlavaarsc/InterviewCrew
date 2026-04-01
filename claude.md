@@ -9,14 +9,15 @@ Multi-Agent Interview Simulator（多Agent面试模拟器）
 ## 当前开发进度
 
 - [x] 需求分析与文档整理
-- [ ] 项目骨架搭建（LangGraph + Agent 定义）
-- [ ] Planner 节点实现
-- [ ] Specialist Agents 实现（TechAgent / BehavioralAgent / ProjectAgent）
-- [ ] Memory 上下文隔离与聚合节点
-- [ ] Baseline 对比实验（Single Agent vs Multi-Agent）
-- [ ] 评估指标与测试
+- [x] 项目骨架搭建（LangGraph + Agent 定义）
+- [x] Planner 节点实现
+- [x] Specialist Agents 实现（TechAgent / BehavioralAgent / ProjectAgent）
+- [x] Memory 上下文隔离与聚合节点
+- [x] CLI Demo 交互入口
+- [x] Baseline 对比实验脚本预留（Single Agent vs Multi-Agent）
+- [x] 基础测试覆盖（pytest 全绿）
 
-**状态**：需求分析已完成，处于项目骨架搭建与架构设计阶段。
+**状态**：Demo 阶段搭建完成。项目已具备可运行的 LangGraph 多 Agent 面试模拟器骨架，Plnner + 3 Specialist Agents + Aggregator 流程已贯通，Memory 隔离机制已验证，测试覆盖通过。
 
 ## 技术栈
 
