@@ -32,8 +32,8 @@ workflow.add_conditional_edges(
     router,
     {"tech": "tech", "behavior": "behavior", "project": "project"},
 )
-workflow.add_edge("tech", "aggregator")
-workflow.add_edge("behavior", "aggregator")
-workflow.add_edge("project", "aggregator")
+workflow.add_edge("tech", END)
+workflow.add_edge("behavior", END)
+workflow.add_edge("project", END)
 
 graph = workflow.compile()

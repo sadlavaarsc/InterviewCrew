@@ -17,14 +17,7 @@ def test_memory_isolation_and_aggregation():
         "status": "ongoing",
     }
 
-    final_state = dict(state)  # type: ignore
-    for event in graph.stream(state, config={"recursion_limit": 10}):
-        node_name, output = next(iter(event.items()))
-        for key, value in output.items():
-            if isinstance(value, list) and key in final_state and isinstance(final_state[key], list):
-                final_state[key].extend(value)
-            else:
-                final_state[key] = value
+    final_state = graph.invoke(state)  # type: ignore
 
     # aggregator 至少运行了一次
     assert final_state["turn"] >= 1
