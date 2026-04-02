@@ -28,15 +28,15 @@ def _extract_content(msg: BaseMessage) -> str:
 class LLMClient:
     def __init__(self):
         self.primary = ChatOpenAI(
-            model=settings.ark_model,
-            api_key=settings.ark_api_key,
-            base_url=settings.ark_base_url,
-            temperature=0.7,
-        )
-        self.fallback = ChatOpenAI(
             model=settings.dashscope_model,
             api_key=settings.dashscope_api_key,
             base_url=settings.dashscope_base_url,
+            temperature=0.7,
+        )
+        self.fallback = ChatOpenAI(
+            model=settings.ark_model,
+            api_key=settings.ark_api_key,
+            base_url=settings.ark_base_url,
             temperature=0.7,
         )
 
