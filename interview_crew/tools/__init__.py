@@ -12,6 +12,18 @@ from interview_crew.tools.stubs import (
     red_flag_detector,
 )
 
+# Register all tools to the global registry
+tool_registry.register("rag_query", rag_query)
+tool_registry.register("code_judge", code_judge)
+tool_registry.register("deep_search", deep_search)
+tool_registry.register("counter_example_gen", counter_example_gen)
+tool_registry.register("stress_trigger", stress_trigger)
+tool_registry.register("whiteboard_sim", whiteboard_sim)
+tool_registry.register("tradeoff_analyzer", tradeoff_analyzer)
+tool_registry.register("cross_ref_checker", cross_ref_checker)
+tool_registry.register("consistency_checker", consistency_checker)
+tool_registry.register("red_flag_detector", red_flag_detector)
+
 __all__ = [
     "ToolPolicy",
     "tool_registry",
