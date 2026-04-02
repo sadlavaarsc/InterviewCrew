@@ -1,4 +1,5 @@
 import argparse
+import readline  # noqa: F401
 from interview_crew.graph import graph
 from interview_crew.state import InterviewState
 
