@@ -193,21 +193,37 @@ self._chain = RunnableSequence(
 - Orchestrator 收到冲突后设置 `state.conflict_flag = True`，并将冲突信息追加到 `contradiction_alerts`，下一轮强制进入 `tech2` 重新深挖。
 
 ### 4.5 Tool 权限与路由 (`interview_crew/tools/registry.py`)
-当前为**存根阶段**（stub 实现位于 `tools/stubs.py`），但权限矩阵已完整定义：
+
+所有工具均使用 **LLM 实现**（位于 `tools/stubs.py`），通过 `LLMClient` 调用模型生成结果，具备 fallback 机制确保稳定性。
 
 | Agent | 可用 Tools | 最大调用次数/轮 | 模型降级池 |
 |-------|-----------|----------------|-----------|
-| tech1 | rag_query, code_judge | 2 | qwen-plus |
-| tech2 | rag_query, deep_search, counter_example_gen, stress_trigger | 4 | qwen-plus / qwen-flash |
-| sysdes | whiteboard_sim, tradeoff_analyzer, cross_ref_checker | 3 | qwen-plus / qwen-flash |
-| hr | consistency_checker, red_flag_detector | 2 | qwen-plus |
+| tech1 | `rag_query`, `code_judge` | 2 | qwen-plus |
+| tech2 | `rag_query`, `deep_search`, `counter_example_gen`, `stress_trigger` | 4 | qwen-plus / qwen-flash |
+| sysdes | `whiteboard_sim`, `tradeoff_analyzer`, `cross_ref_checker` | 3 | qwen-plus / qwen-flash |
+| hr | `consistency_checker`, `red_flag_detector` | 2 | qwen-plus |
 | scribe | (无) | 0 | qwen-flash |
+
+**工具实现详情**：
+
+| 工具名 | 实现方式 | 功能说明 |
+|--------|---------|---------|
+| `rag_query` | LLM 模拟知识库查询 | 生成技术主题的知识点、常见考点、易错点 |
+| `code_judge` | LLM 代码分析 | 评估时间/空间复杂度、边界条件、潜在 bug |
+| `deep_search` | LLM 模拟实时搜索 | 返回技术查询的最新信息 |
+| `counter_example_gen` | LLM 反例生成 | 针对候选方案生成边界测试用例 |
+| `stress_trigger` | 随机+LLM 判断 | 决定是否激活压力面试模式 |
+| `whiteboard_sim` | LLM 生成图表 | 将架构描述转换为 Mermaid 代码 |
+| `tradeoff_analyzer` | LLM 权衡分析 | 对比两个架构选项的优缺点 |
+| `cross_ref_checker` | difflib+LLM | 检测前后陈述是否矛盾 |
+| `consistency_checker` | LLM 一致性判断 | 分析多轮陈述的逻辑一致性 |
+| `red_flag_detector` | 规则+LLM 检测 | 识别候选人回答中的风险信号 |
 
 `ToolPolicy` 提供：
 - `check_permission(tool_name)`：结合 `max_calls_per_round` 做粗粒度限流；
 - `downgrade_model()`：返回该 Agent 允许的最便宜模型。
 
-后续若要将 stub 替换为真实工具（如 Code Executor、RAG Retriever），只需在 `tool_registry.register(name, fn)` 注册，并在 Agent LCEL 链中加入 Tool Binding 即可。
+如需添加真实外部能力（如代码执行器、向量数据库），可在 `tool_registry.register(name, fn)` 注册新实现覆盖现有 LLM 版本。
 
 ### 4.6 LLM Client 工厂 (`interview_crew/llm/client.py`)
 ```python
@@ -282,10 +298,25 @@ conda activate agentEnv && pytest tests/ -v
 4. 在 `interview_crew/agents/__init__.py` 中导出，并在 `orchestrator/engine.py` 的 `self.agents` 与 `_state_order` / `_state_to_agent` 中注册。
 
 ### 6.2 添加新 Tool
-1. 在 `interview_crew/tools/stubs.py` 中实现工具函数；
+1. 在 `interview_crew/tools/stubs.py` 中实现工具函数（推荐使用 LLM + fallback 模式）；
 2. 在 `interview_crew/tools/registry.py` 的 `_TOOL_POLICIES` 中为相关 Agent 分配权限与调用次数；
-3. 在 `interview_crew/tools/__init__.py` 或启动时执行 `tool_registry.register("tool_name", fn)`；
+3. 在 `interview_crew/tools/__init__.py` 中执行 `tool_registry.register("tool_name", fn)`；
 4. 在 Agent LCEL 链中通过 `RunnableLambda` 或 Tool Binding 调用（当前基类尚未接入 tool calling，需自行扩展 `_llm_call` 逻辑）。
+
+**工具实现模板**：
+```python
+def my_tool(input_data: str) -> str:
+    """工具功能说明。"""
+    messages = [
+        {"role": "system", "content": "你是一个..."},
+        {"role": "user", "content": f"输入：{input_data}"}
+    ]
+    try:
+        result = llm.invoke(messages, model_name="qwen3.5-flash")
+        return result
+    except Exception:
+        return "fallback 结果"  # 确保工具不崩溃
+```
 
 ### 6.3 替换 JD 解析器
 `JDParsingStrategy` 是一个抽象基类：
@@ -304,7 +335,7 @@ class JDParsingStrategy(ABC):
 ## 7. 已知局限与未来方向
 
 1. **Token 估算不精确**：当前使用字符数/4，未考虑中文与特殊 token，后续可接入 tiktoken。
-2. **Tool 为存根实现**：`tools/stubs.py` 中所有函数返回占位字符串，尚未与真实能力（代码执行、搜索、RAG）对接。
+2. **工具依赖 LLM 而非真实外部能力**：当前工具通过 LLM 模拟实现（如代码分析、搜索、RAG），尚未对接真实外部系统（代码执行器、搜索引擎、向量数据库）。如需生产级精度，可将 `tool_registry.register()` 替换为真实实现。
 3. **Agent 链无内置 Retry**：LLM 输出 JSON 解析失败时仅做 soft fallback，未做结构性 retry。
 4. **Memory 仅内存持久化**：`InterviewState` 当前在内存中，重启即丢失。如需会话恢复，需将 `transfer_queue` 与 `agent_histories` 序列化到磁盘/数据库。
 5. **状态机为线性管道**：当前状态转移是固定的顺序队列。后续若需动态调度（如根据回答质量跳回某 Agent），需扩展 `_next_state()` 为条件图或评分门控。
@@ -340,7 +371,7 @@ interview_crew/
 │   └── jd_parser.py        # JDParsingStrategy
 ├── tools/
 │   ├── registry.py         # ToolPolicy / ToolRegistry
-│   └── stubs.py            # 9 个工具存根
+│   └── stubs.py            # 10 个 LLM 实现工具（code_judge、rag_query等）
 └── prompts/
     ├── tech1.txt
     ├── tech2.txt
