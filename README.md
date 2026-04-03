@@ -1,6 +1,6 @@
 # InterviewCrew 技术文档
 
-> 面向程序员的多 Agent 技术面试模拟器。本项目通过自定义状态机 + LCEL（LangChain Expression Language）构建了一个可扩展、可观测、带预算与冲突治理的 Multi-Agent 系统。
+> 面向程序员的多 Agent 技术面试模拟器。本项目通过自定义状态机 + LCEL（LangChain Expression Language）构建了一个可扩展、可观测、带预算与冲突治理的 Multi-Agent 系统。提供 FastAPI 后端与 CLI 前端，便于自动化测试与外部工具集成。
 
 ---
 
@@ -28,27 +28,24 @@
 ## 2. 架构全景
 
 ```
-Candidate/CLI
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Orchestrator Engine                          │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  State Machine: screening → tech1 → tech2 → system → hr    │   │
-│  │                 → finished (scribe 生成报告)                │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│  ├─ BudgetGuardian      (token 估算 + 模型降级)                     │
-│  ├─ ConflictArbitrator  (跨 Agent 评分方差检测)                     │
-│  ├─ MemoryDistiller     (轻量 LLM 萃取结构化记忆)                   │
-│  └─ JDParser            (Strategy 模式，LLM 解析 JD Markdown)      │
-└─────────────────────────────────────────────────────────────────────┘
-      │                                    ▲
-      ▼                                    │
-   Agent (LCEL Chain) ────(AgentOutput)───┘
-      │
-      ▼
- ToolPolicy / ToolRegistry
-      (权限矩阵 + 调用次数控制)
+┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
+│  CLI/前端   │  ◄──────────────►  │        FastAPI Backend              │
+│  (cli.py)   │                    │  ┌───────────────────────────────┐  │
+└─────────────┘                    │  │  /sessions      ──创建会话     │  │
+                                   │  │  /step          ──单轮推进     │  │
+                                   │  │  /health        ──健康检查     │  │
+                                   │  └───────────────────────────────┘  │
+                                   │                 │                    │
+                                   │                 ▼                    │
+                                   │      ┌──────────────────┐            │
+                                   │      │ Orchestrator     │            │
+                                   │      │ Engine           │            │
+                                   │      └────────┬─────────┘            │
+                                   │               │                      │
+                                   │      ┌────────▼─────────┐            │
+                                   │      │ Agent LCEL Chain │            │
+                                   │      └──────────────────┘            │
+                                   └─────────────────────────────────────┘
 ```
 
 ### 2.1 关键技术选型
@@ -259,22 +256,57 @@ DASHSCOPE_API_KEY=...
 ```
 其他字段均有默认值（`config.py` 中的 `BaseSettings`）。
 
-### 5.2 CLI 运行
+### 5.2 启动 FastAPI 后端
 ```bash
+python -m interview_crew.server
+# 默认监听 0.0.0.0:8000，带 auto-reload
+```
+
+后端内存维护 `session_id -> Orchestrator` 映射（与当前无持久化设计一致）。核心路由：
+- `POST /sessions` — 创建面试会话
+- `POST /sessions/{session_id}/step` — 推进一轮
+- `GET /sessions/{session_id}` — 查询当前会话完整状态
+- `GET /health` — 健康检查
+
+### 5.3 CLI 前端运行
+CLI 现已改造为 HTTP 客户端，通过 `httpx` 调用本地后端：
+
+```bash
+# 先确保后端已启动（5.2）
 python -m interview_crew.cli --turns 5
 # 挂载外部简历与 JD
 python -m interview_crew.cli --turns 6 --resume ./candidate.md --jd ./jd.md
+# 指定自定义后端地址
+python -m interview_crew.cli --api-url http://127.0.0.1:8000 --turns 4
 ```
 
 CLI 逻辑在 `interview_crew/cli.py` 中：
 1. 解析参数，读取 `position` 与 `resume`（交互式输入）；
-2. 初始化 `InterviewState`；
-3. 循环调用 `orchestrator.step(candidate_response)` 直到 `finished=True`；
+2. `POST /sessions` 创建会话，获得 `session_id`；
+3. 循环 `POST /sessions/{id}/step` 直到 `finished=True`；
 4. 打印最终 `report`。
 
-### 5.3 测试运行
+### 5.4 纯 API 调用示例
 ```bash
-# 运行全部测试（pytest 14/14 通过）
+# 1. 创建会话
+curl -X POST http://127.0.0.1:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"max_turns":4,"candidate_response":"岗位：后端。简历：3年Python。"}'
+# 返回 {"session_id":"...","status":"ongoing"}
+
+# 2. 推进一轮
+curl -X POST http://127.0.0.1:8000/sessions/<session_id>/step \
+  -H "Content-Type: application/json" \
+  -d '{"candidate_response":"熟悉 Django 和 FastAPI。"}'
+# 返回 {"agent":"tech1","question":"...","finished":false,"report":""}
+
+# 3. 查询状态
+curl http://127.0.0.1:8000/sessions/<session_id>
+```
+
+### 5.5 测试运行
+```bash
+# 运行全部测试（pytest 19/19 通过）
 conda activate agentEnv && pytest tests/ -v
 ```
 
@@ -284,6 +316,7 @@ conda activate agentEnv && pytest tests/ -v
 - `test_distiller.py`：Mock LLM 验证 `MemoryDistillate` 字段解析。
 - `test_orchestrator.py`：状态机流转、transfer_queue 增长、冲突标记设置。
 - `test_tools_registry.py`：Agent 权限矩阵、最大调用次数限制、模型降级逻辑。
+- `test_api.py`：FastAPI 路由测试（创建会话、单步推进、终态结束、404 处理、健康检查）。
 
 **Mock 策略**：所有涉及 LLM 调用的测试都通过 `monkeypatch.setattr(llm, "invoke", fake_invoke)` 拦截，不发起真实网络请求。
 
@@ -347,7 +380,9 @@ class JDParsingStrategy(ABC):
 ```
 interview_crew/
 ├── __init__.py
-├── cli.py                  # CLI 入口
+├── api.py                  # FastAPI 后端路由与内存会话管理
+├── server.py               # Uvicorn 启动入口
+├── cli.py                  # CLI 入口（HTTP 客户端）
 ├── config.py               # Pydantic Settings (.env 读取)
 ├── state.py                # InterviewState dataclass
 ├── protocol/
@@ -380,6 +415,7 @@ interview_crew/
     └── scribe.txt
 
 tests/
+├── test_api.py
 ├── test_budget_guardian.py
 ├── test_conflict_arbitrator.py
 ├── test_distiller.py
