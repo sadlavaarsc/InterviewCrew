@@ -5,14 +5,14 @@ from interview_crew.config import settings
 _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
     "tech1": {
         "models": [settings.qwen_plus_model],
-        "tools": ["rag_query", "code_judge"],
-        "max_calls_per_round": 2,
+        "tools": ["rag_query", "code_judge", "code_generator", "code_executor"],
+        "max_calls_per_round": 3,
         "enable_search": False,
         "budget": settings.budget_tech1,
     },
     "tech2": {
         "models": [settings.qwen_plus_model, settings.qwen_flash_model],
-        "tools": ["rag_query", "deep_search", "counter_example_gen", "stress_trigger"],
+        "tools": ["rag_query", "deep_search", "counter_example_gen", "stress_trigger", "code_generator", "code_executor"],
         "max_calls_per_round": 4,
         "enable_search": True,
         "budget": settings.budget_tech2,
@@ -23,6 +23,13 @@ _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
         "max_calls_per_round": 3,
         "enable_search": True,
         "budget": settings.budget_sysdes,
+    },
+    "leader": {
+        "models": [settings.qwen_plus_model],
+        "tools": ["consistency_checker", "project_analyzer"],
+        "max_calls_per_round": 2,
+        "enable_search": False,
+        "budget": settings.budget_leader,
     },
     "hr": {
         "models": [settings.qwen_plus_model],

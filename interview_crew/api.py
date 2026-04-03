@@ -1,11 +1,12 @@
 import uuid
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from interview_crew.state import InterviewState
 from interview_crew.orchestrator.engine import Orchestrator, StepResult
+from interview_crew.services.code_sandbox import code_sandbox
 
 app = FastAPI(title="InterviewCrew API", version="0.1.0")
 
@@ -50,6 +51,40 @@ class SessionStateResponse(BaseModel):
     transfer_queue: list
     competency_history: list
     total_budget_consumed: int
+
+
+class SubmitCodeRequest(BaseModel):
+    code: str
+    language: str = Field(default="python", pattern="^(python|javascript|java|go)$")
+
+
+class TestResult(BaseModel):
+    case_id: int
+    input_data: str
+    expected: str
+    actual: str
+    passed: bool
+    error_message: str = ""
+
+
+class SubmitCodeResponse(BaseModel):
+    compile_success: bool
+    compile_output: str
+    test_results: List[TestResult]
+    overall_passed: bool
+    execution_time_ms: float
+    next_question: str
+    current_sub_stage: str = ""
+
+
+class CodingTaskResponse(BaseModel):
+    has_active_task: bool
+    title: str = ""
+    description: str = ""
+    difficulty: str = ""
+    starter_code: str = ""
+    current_agent: str = ""
+    sub_stage: str = ""
 
 
 def _state_to_dict(state: InterviewState) -> dict:
@@ -107,6 +142,98 @@ def get_session(session_id: str) -> SessionStateResponse:
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return SessionStateResponse(**_state_to_dict(orchestrator.state))
+
+
+@app.post("/sessions/{session_id}/submit-code", response_model=SubmitCodeResponse)
+def submit_code(session_id: str, req: SubmitCodeRequest) -> SubmitCodeResponse:
+    """提交代码执行并获取结果和追问"""
+    orchestrator = _sessions.get(session_id)
+    if orchestrator is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # 获取当前代码任务
+    task = orchestrator.state.current_coding_task
+    if not task:
+        raise HTTPException(status_code=400, detail="No active coding task")
+
+    # 执行代码
+    from interview_crew.protocol.schemas import TestCase
+    test_cases = [TestCase(**tc) for tc in task.get("test_cases", [])]
+    result = code_sandbox.execute(req.code, [tc.model_dump() for tc in test_cases], req.language)
+
+    # 获取当前 Agent 生成追问
+    agent_name = orchestrator.state.current_agent
+    if agent_name not in ["tech1", "tech2"]:
+        raise HTTPException(status_code=400, detail="Not in coding stage")
+
+    agent = orchestrator.agents[agent_name]
+
+    # 构建追问
+    if result.overall_passed:
+        follow_up = (
+            f"代码执行通过！耗时 {result.execution_time_ms:.0f}ms。\n"
+            f"请分析这段代码的时间复杂度和空间复杂度。"
+            f"如果数据量扩大 100 倍，你会如何优化？"
+        )
+    else:
+        failed_tests = [t for t in result.test_results if not t.passed][:2]
+        fail_msgs = "\n".join([
+            f"- 测试用例 {t.case_id}: 期望 {t.expected}, 实际 {t.actual}"
+            for t in failed_tests
+        ])
+        follow_up = (
+            f"代码执行失败。\n"
+            f"失败的测试用例:\n{fail_msgs}\n\n"
+            f"请分析错误原因并说明修复思路（无需重写代码）。"
+        )
+
+    # 记录 Agent 追问到历史
+    assistant_msg = {
+        "role": "assistant",
+        "name": agent_name,
+        "content": follow_up,
+    }
+    orchestrator.state.append_agent_history(agent_name, assistant_msg)
+    orchestrator.state.append_unified(assistant_msg)
+
+    return SubmitCodeResponse(
+        compile_success=result.success,
+        compile_output=result.compile_output,
+        test_results=[TestResult(**t.__dict__) for t in result.test_results],
+        overall_passed=result.overall_passed,
+        execution_time_ms=result.execution_time_ms,
+        next_question=follow_up,
+        current_sub_stage=orchestrator.state.get_sub_stage(agent_name),
+    )
+
+
+@app.get("/sessions/{session_id}/coding-task", response_model=CodingTaskResponse)
+def get_coding_task(session_id: str) -> CodingTaskResponse:
+    """获取当前代码题目（如果处于 coding 阶段）"""
+    orchestrator = _sessions.get(session_id)
+    if orchestrator is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    task = orchestrator.state.current_coding_task
+    agent_name = orchestrator.state.current_agent
+    sub_stage = orchestrator.state.get_sub_stage(agent_name)
+
+    if not task or sub_stage != "coding":
+        return CodingTaskResponse(
+            has_active_task=False,
+            current_agent=agent_name,
+            sub_stage=sub_stage,
+        )
+
+    return CodingTaskResponse(
+        has_active_task=True,
+        title=task.get("title", ""),
+        description=task.get("description", ""),
+        difficulty=task.get("difficulty", ""),
+        starter_code=task.get("starter_code", ""),
+        current_agent=agent_name,
+        sub_stage=sub_stage,
+    )
 
 
 @app.get("/health")

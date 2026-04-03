@@ -11,7 +11,7 @@ from interview_crew.protocol.schemas import (
 )
 from interview_crew.memory.distiller import distill_memory
 from interview_crew.llm.client import estimate_tokens
-from interview_crew.agents import Tech1Agent, Tech2Agent, SysDesAgent, HRAgent, ScribeAgent
+from interview_crew.agents import Tech1Agent, Tech2Agent, SysDesAgent, LeaderAgent, HRAgent, ScribeAgent
 from interview_crew.orchestrator.budget_guardian import BudgetGuardian
 from interview_crew.orchestrator.conflict_arbitrator import ConflictArbitrator
 from interview_crew.orchestrator.jd_parser import JDParsingStrategy, LLMJDParser
@@ -25,7 +25,7 @@ class StepResult:
     report: str = ""
 
 
-_StateMachine = Literal["screening", "tech1", "tech2", "system", "hr", "finished"]
+_StateMachine = Literal["screening", "tech1", "tech2", "system", "leader", "hr", "finished"]
 
 
 class Orchestrator:
@@ -43,16 +43,18 @@ class Orchestrator:
             "tech1": Tech1Agent(),
             "tech2": Tech2Agent(),
             "sysdes": SysDesAgent(),
+            "leader": LeaderAgent(),
             "hr": HRAgent(),
             "scribe": ScribeAgent(),
         }
 
         self._state_order: List[_StateMachine] = [
-            "screening",
-            "tech1",
-            "tech2",
-            "system",
-            "hr",
+            "screening",   # -> tech1
+            "tech1",       # -> tech2 (internal: chat -> coding -> reflect)
+            "tech2",       # -> system (internal: chat -> coding -> reflect)
+            "system",      # -> leader
+            "leader",      # -> hr
+            "hr",          # -> finished
             "finished",
         ]
         self._current_state_index = 0
@@ -88,11 +90,25 @@ class Orchestrator:
         if candidate_response:
             self.state.append_unified({"role": "user", "content": candidate_response})
 
+        # Check if current agent has sub-stages and is not done
+        if self.state.current_agent in ["tech1", "tech2"]:
+            agent_name = self.state.current_agent
+            agent = self.agents[agent_name]
+
+            if agent.has_sub_stages:
+                sub_stage = self.state.get_sub_stage(agent_name)
+
+                if sub_stage != "done":
+                    # Process sub-stage
+                    return self._process_tech_agent_sub_stage(agent_name, candidate_response)
+                else:
+                    # Sub-stages complete, advance to next main state
+                    pass
+
         # Determine next state
         next_state = self._next_state()
         if next_state == "finished" or self.state.turn >= self.state.max_turns:
             self.state.status = "finished"
-            # Generate scribe report if not already done
             report = self._generate_report()
             return StepResult(agent="scribe", question="", finished=True, report=report)
 
@@ -101,12 +117,158 @@ class Orchestrator:
             "screening": "tech1",
             "tech1": "tech2",
             "tech2": "sysdes",
-            "system": "hr",
+            "system": "leader",
+            "leader": "hr",
             "hr": "scribe",
         }
         agent_name = _state_to_agent.get(next_state, next_state)
         self.state.current_agent = agent_name
 
+        # Check if this is a Tech Agent with sub-stages
+        agent = self.agents[agent_name]
+        if agent.has_sub_stages:
+            # Reset sub-stage to beginning
+            self.state.reset_agent_stage(agent_name)
+            return self._process_tech_agent_sub_stage(agent_name, candidate_response)
+
+        return self._process_standard_agent(agent_name, candidate_response)
+
+    def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
+        """Process Tech Agent with sub-stages (chat -> coding -> reflect)."""
+        agent = self.agents[agent_name]
+        sub_stage = self.state.get_sub_stage(agent_name)
+
+        # Distill memory
+        memory_distillate = distill_memory(
+            self.state.unified_history,
+            self.state.session_id,
+            self.state.turn,
+        )
+
+        # Build context based on sub-stage
+        if sub_stage == "chat":
+            context = agent.build_context(memory_distillate)
+        elif sub_stage == "coding":
+            context = agent.build_coding_context(memory_distillate, self.state)
+            # If entering coding stage, generate a problem
+            if self.state.get_stage_turns(agent_name) == 0:
+                difficulty = "easy" if agent_name == "tech1" else "medium"
+                problem = agent.generate_coding_problem(memory_distillate, difficulty)
+                self.state.current_coding_task = problem.model_dump()
+        elif sub_stage == "reflect":
+            context = agent.build_reflect_context(memory_distillate, self.state)
+            # Clear coding task
+            self.state.current_coding_task = None
+        else:
+            context = agent.build_context(memory_distillate)
+
+        # Budget check
+        estimated = agent.estimate_tokens(
+            memory_distillate,
+            candidate_response,
+            self.state.get_agent_history(agent_name),
+            business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
+        )
+        forced_model = self.budget_guardian.check_and_downgrade(agent_name, estimated)
+
+        # Create temporary system prompt with sub-stage context
+        from interview_crew.memory.agent_mailbox import build_agent_messages
+        messages = build_agent_messages(
+            self.state.get_agent_history(agent_name),
+            f"{agent.system_prompt}\n\n【当前阶段】\n{context}",
+            candidate_response,
+            self._business_context_text(),
+            self.state.resume_text,
+        )
+
+        # Invoke LLM
+        from interview_crew.llm.client import llm
+        raw = llm.invoke(messages, model_name=forced_model or agent.preferred_model, temperature=agent.default_temperature)
+
+        # Parse output
+        try:
+            import json
+            data = json.loads(raw.strip())
+            from interview_crew.protocol.schemas import TestCase, CodingProblem
+            if "coding_problem" in data and data["coding_problem"]:
+                problem_data = data["coding_problem"]
+                test_cases = [TestCase(**tc) if isinstance(tc, dict) else tc for tc in problem_data.get("test_cases", [])]
+                problem_data["test_cases"] = test_cases
+                data["coding_problem"] = CodingProblem(**problem_data)
+                # Update current coding task
+                self.state.current_coding_task = data["coding_problem"].model_dump()
+            from interview_crew.protocol.schemas import AgentOutput
+            output = AgentOutput(**data)
+        except Exception as e:
+            from interview_crew.protocol.schemas import AgentOutput
+            output = AgentOutput(
+                question=raw.strip(),
+                evaluation_score=0.5,
+                key_weaknesses=[],
+                follow_up_candidates=[],
+                reasoning=f"parse error: {str(e)}",
+            )
+
+        # Record budget
+        self.budget_guardian.consume(estimated)
+        self.state.total_budget_consumed += estimated
+
+        # Update histories
+        assistant_msg: Message = {
+            "role": "assistant",
+            "name": agent_name,
+            "content": output.question,
+        }
+        self.state.append_agent_history(agent_name, assistant_msg)
+        self.state.append_unified(assistant_msg)
+        self.state.last_question = output.question
+
+        # Update competency history
+        for tag in memory_distillate.competency_vector:
+            self.state.competency_history.append({
+                "dimension": tag.dimension,
+                "score": tag.score,
+                "turn": self.state.turn,
+                "agent": agent_name,
+            })
+
+        # Update sub-stage turn counter
+        self.state.increment_stage_turns(agent_name)
+
+        # Check if should advance sub-stage
+        if sub_stage == "chat" and self.state.get_stage_turns(agent_name) >= 2:
+            self.state.advance_sub_stage(agent_name)
+        elif sub_stage == "coding":
+            # coding stage waits for manual code submission via API
+            pass
+        elif sub_stage == "reflect" and self.state.get_stage_turns(agent_name) >= 1:
+            self.state.advance_sub_stage(agent_name)
+
+        # Build TransferPackage
+        conflict = self.conflict_arbitrator.detect_conflict(self.state.competency_history)
+        if conflict:
+            self.state.conflict_flag = True
+            memory_distillate.contradiction_alerts.append(conflict)
+
+        pkg = TransferPackage(
+            session_id=self.state.session_id,
+            from_agent=agent_name,
+            to_agent=self._peek_next_agent(agent_name),
+            round_completed=self.state.turn,
+            distillate=memory_distillate,
+            raw_digest=self._digest(candidate_response, output.question),
+            budget_consumed=estimated,
+            challenge_flags=[conflict] if conflict else None,
+            agent_question=output.question,
+            evaluation_score=output.evaluation_score,
+        )
+        self.state.transfer_queue.append(pkg)
+
+        return StepResult(agent=agent_name, question=output.question, finished=False)
+
+    def _process_standard_agent(self, agent_name: str, candidate_response: str) -> StepResult:
+        """Process standard agent without sub-stages."""
         # Distill memory
         memory_distillate = distill_memory(
             self.state.unified_history,
@@ -200,7 +362,8 @@ class Orchestrator:
         mapping = {
             "tech1": "tech2",
             "tech2": "sysdes",
-            "sysdes": "hr",
+            "sysdes": "leader",
+            "leader": "hr",
             "hr": "scribe",
             "scribe": "scribe",
         }

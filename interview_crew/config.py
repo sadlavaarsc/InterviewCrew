@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     budget_tech1: int = 2000
     budget_tech2: int = 4000
     budget_sysdes: int = 4000
+    budget_leader: int = 3000
     budget_hr: int = 2000
     budget_scribe: int = 3000
 
