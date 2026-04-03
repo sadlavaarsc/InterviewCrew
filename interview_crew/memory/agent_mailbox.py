@@ -7,6 +7,7 @@ def build_agent_messages(
     system_prompt: str,
     candidate_response: str,
     business_context: str = "",
+    resume_context: str = "",
 ) -> List[Message]:
     messages: List[Message] = [{"role": "system", "content": system_prompt}]
     if business_context:
@@ -14,6 +15,13 @@ def build_agent_messages(
             {
                 "role": "system",
                 "content": f"【业务背景】\n{business_context}",
+            }
+        )
+    if resume_context:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"【候选人简历】\n{resume_context}",
             }
         )
     messages.extend(private_history)

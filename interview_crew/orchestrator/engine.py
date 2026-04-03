@@ -121,6 +121,7 @@ class Orchestrator:
             candidate_response,
             self.state.get_agent_history(agent_name),
             business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
         )
         forced_model = self.budget_guardian.check_and_downgrade(agent_name, estimated)
 
@@ -131,6 +132,7 @@ class Orchestrator:
             self.state.get_agent_history(agent_name),
             business_context=self._business_context_text(),
             forced_model=forced_model,
+            resume_context=self.state.resume_text,
         )
 
         # Record budget
@@ -207,29 +209,116 @@ class Orchestrator:
     def _digest(self, candidate_response: str, question: str) -> str:
         return f"Candidate: {candidate_response[:100]}... | Agent: {question[:100]}..."
 
+    def _build_scribe_context(self) -> str:
+        """构建供 Scribe 使用的完整面试上下文。
+
+        聚合所有 TransferPackage 的详细信息、unified_history 对话记录，
+        确保 Scribe 有充足的证据支撑面评报告。
+        """
+        context_parts = []
+
+        # 1. 面试轮次摘要（详细版）
+        context_parts.append("【面试轮次详情】")
+        for p in self.state.transfer_queue:
+            context_parts.append(f"\n=== 第 {p.round_completed} 轮 [{p.from_agent}] ===")
+            context_parts.append(f"问题: {p.agent_question or 'N/A'}")
+            context_parts.append(f"评分: {p.evaluation_score if p.evaluation_score is not None else 'N/A'}")
+            context_parts.append(f"对话摘要: {p.raw_digest}")
+
+            # 添加该轮的 distillate 详情
+            d = p.distillate
+            if d.candidate_profile:
+                context_parts.append("候选人画像更新:")
+                for key, value in d.candidate_profile.items():
+                    context_parts.append(f"  - {key}: {value}")
+
+            if d.competency_vector:
+                context_parts.append("能力维度评估:")
+                for tag in d.competency_vector:
+                    context_parts.append(
+                        f"  - {tag.dimension}: {tag.score:.2f}分 (置信度: {tag.confidence:.2f})"
+                    )
+                    context_parts.append(f"    证据: {tag.evidence}")
+
+            if d.doubt_list:
+                context_parts.append(f"质疑点: {', '.join(d.doubt_list)}")
+
+            if d.contradiction_alerts:
+                context_parts.append(f"冲突警告: {', '.join(d.contradiction_alerts)}")
+
+            if d.recommended_focus:
+                context_parts.append(f"推荐关注点: {d.recommended_focus}")
+
+            if p.challenge_flags:
+                context_parts.append(f"挑战标记: {', '.join(p.challenge_flags)}")
+        context_parts.append("")
+
+        # 2. 完整对话历史
+        if self.state.unified_history:
+            context_parts.append("【完整对话历史】")
+            for msg in self.state.unified_history:
+                role = msg.get("role", "unknown")
+                name = msg.get("name", "")
+                content = msg.get("content", "")
+
+                if role == "assistant" and name:
+                    context_parts.append(f"[{name}] {content}")
+                elif role == "user":
+                    context_parts.append(f"[候选人] {content}")
+                else:
+                    context_parts.append(f"[{role}] {content}")
+            context_parts.append("")
+
+        # 3. 能力历史聚合
+        if self.state.competency_history:
+            context_parts.append("【能力评分历史】")
+            for entry in self.state.competency_history:
+                context_parts.append(
+                    f"- 第{entry['turn']}轮 [{entry['agent']}]: "
+                    f"{entry['dimension']} = {entry['score']:.2f}"
+                )
+            context_parts.append("")
+
+        return "\n".join(context_parts)
+
     def _generate_report(self) -> str:
         if not self.state.transfer_queue:
             return "暂无面评数据。"
 
         # Use scribe agent to generate final report
         scribe = self.agents["scribe"]
-        # Build a synthetic distillate from transfer queue summaries
-        combined = "\n".join(
-            f"Round {p.round_completed} [{p.from_agent}]: score={p.evaluation_score}, focus={p.distillate.recommended_focus}"
-            for p in self.state.transfer_queue
-        )
+
+        # 构建完整的面试上下文
+        full_context = self._build_scribe_context()
+
+        # 构建聚合的 distillate，保留所有关键信息
+        all_competency_vectors = []
+        all_doubts = []
+        all_alerts = []
+        candidate_profile_summary = {}
+
+        for p in self.state.transfer_queue:
+            d = p.distillate
+            all_competency_vectors.extend(d.competency_vector)
+            all_doubts.extend(d.doubt_list)
+            all_alerts.extend(d.contradiction_alerts)
+            if d.candidate_profile:
+                candidate_profile_summary.update(d.candidate_profile)
+
         synthetic_distillate = MemoryDistillate(
-            candidate_profile={"summary": combined},
-            competency_vector=[],
-            doubt_list=[],
-            contradiction_alerts=[],
-            recommended_focus="生成最终面评报告",
+            candidate_profile=candidate_profile_summary or {"面试轮数": str(len(self.state.transfer_queue))},
+            competency_vector=all_competency_vectors,
+            doubt_list=list(set(all_doubts)),  # 去重
+            contradiction_alerts=list(set(all_alerts)),  # 去重
+            recommended_focus="基于完整面试记录生成最终面评报告",
         )
+
         output = scribe.invoke(
             synthetic_distillate,
-            candidate_response=combined,
+            candidate_response=full_context,  # 传递完整的上下文作为 candidate_response
             history=self.state.get_agent_history("scribe"),
             business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
         )
 
         # Record scribe interaction

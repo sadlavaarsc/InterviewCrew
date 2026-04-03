@@ -44,11 +44,14 @@ class BaseAgent(ABC):
         candidate_response: str = inputs.get("candidate_response", "")
         business_context: str = inputs.get("business_context", "")
         history: List[Message] = inputs.get("history", [])
+        resume_context: str = inputs.get("resume_context", "")
 
         agent_context = self.build_context(distillate)
         full_system = f"{self.system_prompt}\n\n【记忆摘要】\n{agent_context}"
 
-        messages = build_agent_messages(history, full_system, candidate_response, business_context)
+        messages = build_agent_messages(
+            history, full_system, candidate_response, business_context, resume_context
+        )
         return {"messages": messages, "meta": inputs}
 
     def _llm_call(self, inputs: dict) -> dict:
@@ -84,6 +87,7 @@ class BaseAgent(ABC):
         history: List[Message],
         business_context: str = "",
         forced_model: Optional[str] = None,
+        resume_context: str = "",
     ) -> AgentOutput:
         result = self._chain.invoke(
             {
@@ -92,6 +96,7 @@ class BaseAgent(ABC):
                 "history": history,
                 "business_context": business_context,
                 "forced_model": forced_model,
+                "resume_context": resume_context,
             }
         )
         return result
@@ -102,8 +107,9 @@ class BaseAgent(ABC):
         candidate_response: str,
         history: List[Message],
         business_context: str = "",
+        resume_context: str = "",
     ) -> int:
         agent_context = self.build_context(distillate)
         full_system = f"{self.system_prompt}\n\n【记忆摘要】\n{agent_context}"
-        messages = build_agent_messages(history, full_system, candidate_response, business_context)
+        messages = build_agent_messages(history, full_system, candidate_response, business_context, resume_context)
         return estimate_tokens(messages)
