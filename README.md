@@ -37,6 +37,36 @@
 - **💰 Budget-Aware**: Per-agent token budgets with automatic model downgrade to control costs
 - **🔌 Flexible Configuration**: Enable/disable any interview round, customize turn limits per agent
 - **⚡ Dual Model Fallback**: Ark + DashScope automatic failover for stability
+- **🧪 Single Agent Baseline**: Built-in baseline for A/B testing — compare Multi-Agent vs Single-Agent performance with identical APIs
+
+---
+
+## 🧪 Single Agent Baseline
+
+InterviewCrew includes a **Single Agent Baseline** for quantitative comparison with the Multi-Agent System. Both modes expose identical APIs, making it easy to run A/B tests.
+
+### Quick Comparison
+
+| Feature | Multi-Agent | Single-Agent Baseline |
+|---------|-------------|----------------------|
+| Architecture | 5 specialist agents + orchestrator | 1 all-in-one agent |
+| Memory | Isolated per agent | Unified history |
+| Model Strategy | Per-agent budget with downgrade | Plus for interview, Flash for report |
+| Use Case | Production-grade simulation | Baseline for comparison |
+
+### Usage
+
+```bash
+# Multi-Agent mode (default)
+curl -X POST http://localhost:8000/sessions \
+  -d '{"mode": "multi_agent", "total_max_turns": 15}'
+
+# Single-Agent Baseline
+curl -X POST http://localhost:8000/sessions \
+  -d '{"mode": "single_agent", "total_max_turns": 15}'
+```
+
+Both modes use the same `/step` and `/sessions/{id}` endpoints.
 
 ---
 
@@ -182,6 +212,68 @@ curl -X POST http://localhost:8000/sessions \
 curl -X POST http://localhost:8000/sessions/{session_id}/step \
   -H "Content-Type: application/json" \
   -d '{"candidate_response": "Your answer here"}'
+```
+
+### API Reference
+
+**Create Session** — `POST /sessions`
+```json
+// Request
+{
+  "mode": "multi_agent",           // "multi_agent" (default) or "single_agent"
+  "total_max_turns": 15,
+  "candidate_response": "Initial response"
+}
+
+// Response
+{
+  "session_id": "uuid",
+  "status": "ongoing",
+  "mode": "multi_agent"
+}
+```
+
+**Step Through Interview** — `POST /sessions/{id}/step`
+```json
+// Request
+{
+  "candidate_response": "Your answer"
+}
+
+// Response
+{
+  "agent": "tech1",
+  "question": "Next question...",
+  "finished": false,
+  "report": "",
+  // Token statistics
+  "token_consumed_this_turn": 1250,
+  "total_token_consumed": 8750,
+  // Detailed breakdown by model tier
+  "plus_token_consumed_this_turn": 1000,
+  "flash_token_consumed_this_turn": 250,
+  "total_plus_token_consumed": 7000,
+  "total_flash_token_consumed": 1750
+}
+```
+
+**Get Session State** — `GET /sessions/{id}`
+```json
+{
+  "session_id": "uuid",
+  "status": "ongoing",
+  "current_agent": "tech1",
+  "turn": 5,
+  // Mode and statistics
+  "mode": "single_agent",
+  "llm_call_count": 10,
+  "token_consumed": 8750,
+  // Detailed breakdown
+  "plus_call_count": 8,
+  "flash_call_count": 2,
+  "total_plus_token_consumed": 7000,
+  "total_flash_token_consumed": 1750
+}
 ```
 
 ---

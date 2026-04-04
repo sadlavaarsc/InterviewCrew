@@ -365,7 +365,64 @@ class JDParsingStrategy(ABC):
 
 ---
 
-## 7. 已知局限与未来方向
+## 7. Single Agent Baseline
+
+为支持 MAS vs SAS 的量化对比研究，项目内置了 **Single Agent Baseline**。
+
+### 7.1 架构对比
+
+| 维度 | Multi-Agent System | Single-Agent Baseline |
+|------|-------------------|----------------------|
+| **架构** | 5 位专业 Agent + Orchestrator | 1 位全能 Agent |
+| **记忆** | 每位 Agent 独立历史 | 统一历史记录 |
+| **模型策略** | 每轮独立预算控制 + 自动降级 | 主面试用 Plus，报告用 Flash |
+| **代码面试** | 完整支持（coding → reflect） | 不支持（简化设计） |
+| **配置** | 支持按 Agent 启用/禁用 | 仅支持总轮数配置 |
+
+### 7.2 使用方式
+
+```python
+# Multi-Agent 模式（默认）
+curl -X POST /sessions -d '{"mode": "multi_agent"}'
+
+# Single-Agent 模式
+curl -X POST /sessions -d '{"mode": "single_agent"}'
+```
+
+### 7.3 Token 统计设计
+
+Baseline 和 MAS 使用相同的 `StepResult` 结构，支持按模型级别细分的 Token 统计：
+
+```python
+@dataclass
+class StepResult:
+    agent: str
+    question: str
+    finished: bool
+    report: str = ""
+    # Token 统计（总计）
+    token_consumed_this_turn: int = 0
+    total_token_consumed: int = 0
+    # 按模型级别细分
+    plus_token_consumed_this_turn: int = 0      # qwen-plus（完整模型）
+    flash_token_consumed_this_turn: int = 0     # qwen-flash（降级模型）
+    total_plus_token_consumed: int = 0
+    total_flash_token_consumed: int = 0
+```
+
+### 7.4 Baseline 的模型策略
+
+Single Agent Baseline 采用成本优化的模型选择策略：
+
+1. **主面试对话**：使用 `qwen3.5-plus`（完整模型，确保面试质量）
+2. **最终报告生成**：使用 `qwen3.5-flash`（降级模型，节省成本）
+3. **错误降级**：Plus 调用失败时自动降级到 Flash
+
+这种策略在保持面试质量的同时，将报告生成等低频任务使用低成本模型，实现成本效益平衡。
+
+---
+
+## 8. 已知局限与未来方向
 
 1. **Token 估算不精确**：当前使用字符数/4，未考虑中文与特殊 token，后续可接入 tiktoken。
 2. **工具依赖 LLM 而非真实外部能力**：当前工具通过 LLM 模拟实现（如代码分析、搜索、RAG），尚未对接真实外部系统（代码执行器、搜索引擎、向量数据库）。如需生产级精度，可将 `tool_registry.register()` 替换为真实实现。
@@ -375,7 +432,7 @@ class JDParsingStrategy(ABC):
 
 ---
 
-## 8. 目录结构速查
+## 9. 目录结构速查
 
 ```
 interview_crew/
@@ -385,6 +442,12 @@ interview_crew/
 ├── cli.py                  # CLI 入口（HTTP 客户端）
 ├── config.py               # Pydantic Settings (.env 读取)
 ├── state.py                # InterviewState dataclass
+├── baseline/               # 单 Agent Baseline（对比测试用）
+│   ├── __init__.py
+│   ├── single_agent_orchestrator.py
+│   ├── single_agent.py
+│   └── prompts/
+│       └── single_agent.txt
 ├── protocol/
 │   └── schemas.py          # STP: TransferPackage / MemoryDistillate / ...
 ├── llm/

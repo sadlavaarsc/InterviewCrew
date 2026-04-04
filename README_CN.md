@@ -37,6 +37,36 @@
 - **💰 预算感知**：每位面试官独立的 Token 预算，超支自动降级模型，成本控制精准可控
 - **🔌 灵活配置**：可自由启用/禁用任意面试轮次，自定义每轮最大回合数
 - **⚡ 双模型容错**：Ark + DashScope 自动故障转移，确保服务稳定性
+- **🧪 单 Agent Baseline**：内置基线对比系统 —— 用完全相同的 API 对比多 Agent 与单 Agent 的效果
+
+---
+
+## 🧪 单 Agent Baseline
+
+InterviewCrew 提供**单 Agent 基线**用于与多 Agent 系统进行量化对比。两种模式暴露完全相同的 API，便于进行 A/B 测试。
+
+### 快速对比
+
+| 特性 | 多 Agent (MAS) | 单 Agent (SAS Baseline) |
+|------|---------------|------------------------|
+| 架构 | 5 位专业面试官 + 编排器 | 1 位全能面试官 |
+| 记忆 | 每位面试官独立 | 统一历史记录 |
+| 模型策略 | 每轮独立预算与降级 | 主面试用 Plus，报告用 Flash |
+| 适用场景 | 生产级真实模拟 | 对比基线测试 |
+
+### 使用方式
+
+```bash
+# 多 Agent 模式（默认）
+curl -X POST http://localhost:8000/sessions \
+  -d '{"mode": "multi_agent", "total_max_turns": 15}'
+
+# 单 Agent 基线
+curl -X POST http://localhost:8000/sessions \
+  -d '{"mode": "single_agent", "total_max_turns": 15}'
+```
+
+两种模式使用完全相同的 `/step` 和 `/sessions/{id}` 接口。
 
 ---
 
@@ -189,6 +219,68 @@ curl -X POST http://localhost:8000/sessions \
 curl -X POST http://localhost:8000/sessions/{session_id}/step \
   -H "Content-Type: application/json" \
   -d '{"candidate_response": "你的回答"}'
+```
+
+### API 参考
+
+**创建会话** — `POST /sessions`
+```json
+// 请求
+{
+  "mode": "multi_agent",           // "multi_agent" (默认) 或 "single_agent"
+  "total_max_turns": 15,
+  "candidate_response": "初始回答"
+}
+
+// 响应
+{
+  "session_id": "uuid",
+  "status": "ongoing",
+  "mode": "multi_agent"
+}
+```
+
+**推进面试** — `POST /sessions/{id}/step`
+```json
+// 请求
+{
+  "candidate_response": "你的回答"
+}
+
+// 响应
+{
+  "agent": "tech1",
+  "question": "下一个问题...",
+  "finished": false,
+  "report": "",
+  // Token 统计
+  "token_consumed_this_turn": 1250,
+  "total_token_consumed": 8750,
+  // 按模型级别细分
+  "plus_token_consumed_this_turn": 1000,
+  "flash_token_consumed_this_turn": 250,
+  "total_plus_token_consumed": 7000,
+  "total_flash_token_consumed": 1750
+}
+```
+
+**获取会话状态** — `GET /sessions/{id}`
+```json
+{
+  "session_id": "uuid",
+  "status": "ongoing",
+  "current_agent": "tech1",
+  "turn": 5,
+  // 模式和统计
+  "mode": "single_agent",
+  "llm_call_count": 10,
+  "token_consumed": 8750,
+  // 详细细分
+  "plus_call_count": 8,
+  "flash_call_count": 2,
+  "total_plus_token_consumed": 7000,
+  "total_flash_token_consumed": 1750
+}
 ```
 
 ---
