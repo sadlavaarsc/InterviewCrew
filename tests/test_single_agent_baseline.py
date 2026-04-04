@@ -26,14 +26,18 @@ class TestSingleAgentOrchestrator:
         assert orchestrator.token_consumed == 0
 
     def test_step_result_structure(self):
-        """Test StepResult has the expected structure with token stats."""
+        """Test StepResult has the expected structure with detailed token stats."""
         result = StepResult(
             agent="interviewer",
             question="Test question",
             finished=False,
             report="",
             token_consumed_this_turn=100,
-            total_token_consumed=500
+            total_token_consumed=500,
+            plus_token_consumed_this_turn=80,
+            flash_token_consumed_this_turn=20,
+            total_plus_token_consumed=400,
+            total_flash_token_consumed=100
         )
 
         assert result.agent == "interviewer"
@@ -41,9 +45,14 @@ class TestSingleAgentOrchestrator:
         assert result.finished is False
         assert result.token_consumed_this_turn == 100
         assert result.total_token_consumed == 500
+        # Detailed breakdown
+        assert result.plus_token_consumed_this_turn == 80
+        assert result.flash_token_consumed_this_turn == 20
+        assert result.total_plus_token_consumed == 400
+        assert result.total_flash_token_consumed == 100
 
     def test_get_stats(self):
-        """Test get_stats returns expected structure."""
+        """Test get_stats returns expected structure with detailed breakdown."""
         state = InterviewState(
             session_id="test-session",
             config=InterviewConfig(total_max_turns=5)
@@ -57,6 +66,11 @@ class TestSingleAgentOrchestrator:
         assert "token_consumed" in stats
         assert "mode" in stats
         assert stats["mode"] == "single_agent"
+        # Detailed breakdown by model tier
+        assert "plus_call_count" in stats
+        assert "flash_call_count" in stats
+        assert "total_plus_token_consumed" in stats
+        assert "total_flash_token_consumed" in stats
 
     @patch('interview_crew.baseline.single_agent_orchestrator.llm.invoke')
     def test_step_with_mock_llm(self, mock_invoke):

@@ -15,6 +15,7 @@ from interview_crew.protocol.schemas import (
 )
 from interview_crew.llm.client import estimate_tokens, llm
 from interview_crew.memory.distiller import distill_memory
+from interview_crew.config import settings
 
 
 @dataclass
@@ -24,8 +25,14 @@ class StepResult:
     question: str
     finished: bool
     report: str = ""
+    # Token statistics for comparison testing
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
+    # Detailed breakdown by model tier
+    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
+    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    total_plus_token_consumed: int = 0
+    total_flash_token_consumed: int = 0
 
 
 class SingleAgentOrchestrator:
@@ -45,6 +52,12 @@ class SingleAgentOrchestrator:
         self.turn_count = 0
         self.llm_call_count = 0
         self.token_consumed = 0
+
+        # Detailed token tracking by model tier
+        self.total_plus_token_consumed = 0   # Full model (qwen3.5-plus)
+        self.total_flash_token_consumed = 0  # Downgrade model (qwen3.5-flash)
+        self.plus_call_count = 0
+        self.flash_call_count = 0
 
         # Load prompt
         prompt_path = Path(__file__).parent / "prompts" / "single_agent.txt"
@@ -90,23 +103,38 @@ Be thorough but concise."""
                 finished=True,
                 report=report,
                 token_consumed_this_turn=0,
-                total_token_consumed=self.token_consumed
+                total_token_consumed=self.token_consumed,
+                plus_token_consumed_this_turn=0,
+                flash_token_consumed_this_turn=0,
+                total_plus_token_consumed=self.total_plus_token_consumed,
+                total_flash_token_consumed=self.total_flash_token_consumed
             )
 
-        # 3. Build context and generate question
+        # 3. Build context and generate question (using full model for main interview)
         messages = self._build_messages()
 
         # 4. Estimate tokens before call
         estimated_tokens = estimate_tokens(messages)
 
-        # 5. Call LLM
+        # 5. Call LLM (using full model - qwen-plus)
+        model_used = settings.qwen_plus_model
         try:
-            response = llm.invoke(messages, model_name="qwen3.5-plus", temperature=0.7)
+            response = llm.invoke(messages, model_name=model_used, temperature=0.7)
             self.llm_call_count += 1
+            self.plus_call_count += 1
             self.token_consumed += estimated_tokens
+            self.total_plus_token_consumed += estimated_tokens
         except Exception as e:
-            # Fallback response
-            response = f"[Error generating question: {str(e)}] Could you tell me more about your technical background?"
+            # Fallback to downgrade model on error
+            model_used = settings.qwen_flash_model
+            try:
+                response = llm.invoke(messages, model_name=model_used, temperature=0.7)
+                self.llm_call_count += 1
+                self.flash_call_count += 1
+                self.token_consumed += estimated_tokens
+                self.total_flash_token_consumed += estimated_tokens
+            except Exception:
+                response = f"[Error generating question: {str(e)}] Could you tell me more about your technical background?"
 
         # 6. Update state
         self.state.unified_history.append({
@@ -125,7 +153,11 @@ Be thorough but concise."""
             finished=False,
             report="",
             token_consumed_this_turn=estimated_tokens,
-            total_token_consumed=self.token_consumed
+            total_token_consumed=self.token_consumed,
+            plus_token_consumed_this_turn=estimated_tokens if model_used == settings.qwen_plus_model else 0,
+            flash_token_consumed_this_turn=estimated_tokens if model_used == settings.qwen_flash_model else 0,
+            total_plus_token_consumed=self.total_plus_token_consumed,
+            total_flash_token_consumed=self.total_flash_token_consumed
         )
 
     def _build_messages(self) -> List[Dict[str, str]]:
@@ -159,7 +191,7 @@ Be thorough but concise."""
         return messages
 
     def _generate_final_report(self) -> str:
-        """Generate final interview report."""
+        """Generate final interview report using downgrade model (flash)."""
         report_prompt = f"""Based on the following interview conversation, generate a brief evaluation report.
 
 Conversation:
@@ -174,12 +206,20 @@ Provide a concise report with:
 
 Keep it brief (3-5 bullet points)."""
 
+        # Estimate tokens for report generation
+        estimated_tokens = estimate_tokens([{"role": "user", "content": report_prompt}])
+
         try:
             report = llm.invoke(
                 [{"role": "user", "content": report_prompt}],
-                model_name="qwen3.5-flash",
+                model_name=settings.qwen_flash_model,
                 temperature=0.5
             )
+            # Track flash model usage for report generation
+            self.llm_call_count += 1
+            self.flash_call_count += 1
+            self.token_consumed += estimated_tokens
+            self.total_flash_token_consumed += estimated_tokens
             return report
         except Exception:
             return "Interview completed. Report generation failed."
@@ -225,5 +265,10 @@ Keep it brief (3-5 bullet points)."""
             "turn_count": self.turn_count,
             "llm_call_count": self.llm_call_count,
             "token_consumed": self.token_consumed,
+            # Detailed breakdown by model tier
+            "plus_call_count": self.plus_call_count,
+            "flash_call_count": self.flash_call_count,
+            "total_plus_token_consumed": self.total_plus_token_consumed,
+            "total_flash_token_consumed": self.total_flash_token_consumed,
             "mode": "single_agent"
         }

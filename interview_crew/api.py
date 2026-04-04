@@ -104,6 +104,11 @@ class StepResponse(BaseModel):
     # Token statistics for comparison testing
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
+    # Detailed breakdown by model tier
+    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
+    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    total_plus_token_consumed: int = 0
+    total_flash_token_consumed: int = 0
 
 
 class SessionStateResponse(BaseModel):
@@ -126,6 +131,11 @@ class SessionStateResponse(BaseModel):
     mode: str = "multi_agent"  # multi_agent or single_agent
     llm_call_count: int = 0
     token_consumed: int = 0
+    # Detailed breakdown by model tier
+    plus_call_count: int = 0
+    flash_call_count: int = 0
+    total_plus_token_consumed: int = 0
+    total_flash_token_consumed: int = 0
 
 
 class SubmitCodeRequest(BaseModel):
@@ -175,12 +185,20 @@ def _state_to_dict(state: InterviewState, orchestrator: OrchestratorType = None)
     mode = "multi_agent"
     llm_call_count = 0
     token_consumed = 0
+    plus_call_count = 0
+    flash_call_count = 0
+    total_plus_token_consumed = 0
+    total_flash_token_consumed = 0
     if orchestrator:
         if isinstance(orchestrator, SingleAgentOrchestrator):
             mode = "single_agent"
             stats = orchestrator.get_stats()
             llm_call_count = stats.get("llm_call_count", 0)
             token_consumed = stats.get("token_consumed", 0)
+            plus_call_count = stats.get("plus_call_count", 0)
+            flash_call_count = stats.get("flash_call_count", 0)
+            total_plus_token_consumed = stats.get("total_plus_token_consumed", 0)
+            total_flash_token_consumed = stats.get("total_flash_token_consumed", 0)
         # For multi-agent, budget consumed is tracked in state
 
     return {
@@ -203,6 +221,11 @@ def _state_to_dict(state: InterviewState, orchestrator: OrchestratorType = None)
         "mode": mode,
         "llm_call_count": llm_call_count,
         "token_consumed": token_consumed,
+        # Detailed breakdown by model tier
+        "plus_call_count": plus_call_count,
+        "flash_call_count": flash_call_count,
+        "total_plus_token_consumed": total_plus_token_consumed,
+        "total_flash_token_consumed": total_flash_token_consumed,
     }
 
 
@@ -266,6 +289,11 @@ def step(session_id: str, req: StepRequest) -> StepResponse:
         report=result.report,
         token_consumed_this_turn=result.token_consumed_this_turn,
         total_token_consumed=result.total_token_consumed,
+        # Detailed breakdown by model tier
+        plus_token_consumed_this_turn=result.plus_token_consumed_this_turn,
+        flash_token_consumed_this_turn=result.flash_token_consumed_this_turn,
+        total_plus_token_consumed=result.total_plus_token_consumed,
+        total_flash_token_consumed=result.total_flash_token_consumed,
     )
 
 

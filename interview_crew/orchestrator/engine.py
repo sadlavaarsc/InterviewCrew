@@ -25,9 +25,14 @@ class StepResult:
     question: str
     finished: bool
     report: str = ""
-    # Token statistics for comparison testing (only used by single_agent baseline)
+    # Token statistics for comparison testing
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
+    # Detailed breakdown by model tier
+    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
+    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    total_plus_token_consumed: int = 0
+    total_flash_token_consumed: int = 0
 
 
 _StateMachine = Literal["screening", "tech1", "tech2", "system", "leader", "hr", "finished"]
