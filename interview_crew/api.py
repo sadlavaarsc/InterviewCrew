@@ -1,18 +1,22 @@
 import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from interview_crew.state import InterviewState
 from interview_crew.orchestrator.engine import Orchestrator, StepResult
+from interview_crew.baseline.single_agent_orchestrator import SingleAgentOrchestrator
 from interview_crew.services.code_sandbox import code_sandbox
 from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig
+
+# Type alias for orchestrator
+OrchestratorType = Union[Orchestrator, SingleAgentOrchestrator]
 
 app = FastAPI(title="InterviewCrew API", version="0.1.0")
 
 # In-memory session storage
-_sessions: Dict[str, Orchestrator] = {}
+_sessions: Dict[str, OrchestratorType] = {}
 
 
 class RoundConfigInput(BaseModel):
@@ -29,6 +33,9 @@ class CreateSessionRequest(BaseModel):
     Examples:
         # Default full interview (all rounds, ~20-30 turns)
         {}
+
+        # Single agent baseline mode
+        {"mode": "single_agent"}
 
         # Only tech rounds (quick technical screening)
         {
@@ -58,6 +65,12 @@ class CreateSessionRequest(BaseModel):
             }
         }
     """
+    # Mode selection: multi_agent (default) or single_agent (baseline)
+    mode: Literal["multi_agent", "single_agent"] = Field(
+        default="multi_agent",
+        description="Interview mode: multi_agent (specialist agents) or single_agent (baseline)"
+    )
+
     # Legacy field (deprecated, use config.total_max_turns)
     max_turns: int = Field(default=6, ge=1, le=50)
 
@@ -76,6 +89,7 @@ class CreateSessionRequest(BaseModel):
 class CreateSessionResponse(BaseModel):
     session_id: str
     status: str
+    mode: str = "multi_agent"
 
 
 class StepRequest(BaseModel):
@@ -87,6 +101,9 @@ class StepResponse(BaseModel):
     question: str
     finished: bool
     report: str = ""
+    # Token statistics for comparison testing
+    token_consumed_this_turn: int = 0
+    total_token_consumed: int = 0
 
 
 class SessionStateResponse(BaseModel):
@@ -105,6 +122,10 @@ class SessionStateResponse(BaseModel):
     transfer_queue: list
     competency_history: list
     total_budget_consumed: int
+    # Mode and statistics for comparison testing
+    mode: str = "multi_agent"  # multi_agent or single_agent
+    llm_call_count: int = 0
+    token_consumed: int = 0
 
 
 class SubmitCodeRequest(BaseModel):
@@ -141,7 +162,7 @@ class CodingTaskResponse(BaseModel):
     sub_stage: str = ""
 
 
-def _state_to_dict(state: InterviewState, orchestrator: Orchestrator = None) -> dict:
+def _state_to_dict(state: InterviewState, orchestrator: OrchestratorType = None) -> dict:
     """Serialize InterviewState to a JSON-friendly dict."""
     # Get enabled rounds from orchestrator if available
     enabled_rounds = []
@@ -149,6 +170,18 @@ def _state_to_dict(state: InterviewState, orchestrator: Orchestrator = None) -> 
         enabled_rounds = orchestrator._enabled_rounds
     elif state.config:
         enabled_rounds = state.config.get_enabled_rounds()
+
+    # Get mode and statistics from orchestrator
+    mode = "multi_agent"
+    llm_call_count = 0
+    token_consumed = 0
+    if orchestrator:
+        if isinstance(orchestrator, SingleAgentOrchestrator):
+            mode = "single_agent"
+            stats = orchestrator.get_stats()
+            llm_call_count = stats.get("llm_call_count", 0)
+            token_consumed = stats.get("token_consumed", 0)
+        # For multi-agent, budget consumed is tracked in state
 
     return {
         "session_id": state.session_id,
@@ -166,6 +199,10 @@ def _state_to_dict(state: InterviewState, orchestrator: Orchestrator = None) -> 
         "transfer_queue": [pkg.model_dump() for pkg in state.transfer_queue],
         "competency_history": state.competency_history,
         "total_budget_consumed": state.total_budget_consumed,
+        # Mode and statistics for comparison testing
+        "mode": mode,
+        "llm_call_count": llm_call_count,
+        "token_consumed": token_consumed,
     }
 
 
@@ -205,9 +242,15 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         resume_path=req.resume_path,
         jd_path=req.jd_path,
     )
-    orchestrator = Orchestrator(state)
+
+    # Create orchestrator based on mode
+    if req.mode == "single_agent":
+        orchestrator = SingleAgentOrchestrator(state)
+    else:
+        orchestrator = Orchestrator(state)
+
     _sessions[session_id] = orchestrator
-    return CreateSessionResponse(session_id=session_id, status=state.status)
+    return CreateSessionResponse(session_id=session_id, status=state.status, mode=req.mode)
 
 
 @app.post("/sessions/{session_id}/step", response_model=StepResponse)
@@ -221,6 +264,8 @@ def step(session_id: str, req: StepRequest) -> StepResponse:
         question=result.question,
         finished=result.finished,
         report=result.report,
+        token_consumed_this_turn=result.token_consumed_this_turn,
+        total_token_consumed=result.total_token_consumed,
     )
 
 
@@ -238,6 +283,13 @@ def submit_code(session_id: str, req: SubmitCodeRequest) -> SubmitCodeResponse:
     orchestrator = _sessions.get(session_id)
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Single agent mode does not support code submission
+    if isinstance(orchestrator, SingleAgentOrchestrator):
+        raise HTTPException(
+            status_code=400,
+            detail="Code submission not supported in single_agent mode"
+        )
 
     # 获取当前代码任务
     task = orchestrator.state.current_coding_task
@@ -370,6 +422,10 @@ def get_coding_task(session_id: str) -> CodingTaskResponse:
     orchestrator = _sessions.get(session_id)
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Single agent mode does not support coding tasks
+    if isinstance(orchestrator, SingleAgentOrchestrator):
+        return CodingTaskResponse(has_active_task=False)
 
     task = orchestrator.state.current_coding_task
     agent_name = orchestrator.state.current_agent

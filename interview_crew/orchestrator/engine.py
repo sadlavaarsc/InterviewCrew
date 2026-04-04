@@ -25,6 +25,9 @@ class StepResult:
     question: str
     finished: bool
     report: str = ""
+    # Token statistics for comparison testing (only used by single_agent baseline)
+    token_consumed_this_turn: int = 0
+    total_token_consumed: int = 0
 
 
 _StateMachine = Literal["screening", "tech1", "tech2", "system", "leader", "hr", "finished"]
