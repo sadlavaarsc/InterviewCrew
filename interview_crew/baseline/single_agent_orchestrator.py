@@ -38,10 +38,25 @@ class StepResult:
 class SingleAgentOrchestrator:
     """Single Agent Orchestrator - One agent handles all interview types.
 
-    This is a simplified baseline for comparison with the Multi-Agent System.
-    It maintains the same interface as the original Orchestrator but uses
-    a single agent to handle technical, system design, and behavioral questions.
+    This baseline simulates the same interview flow as Multi-Agent System:
+    tech1 → tech2 → sysdes → leader → hr → scribe
+
+    By using the same stage progression, we can fairly compare:
+    - MAS: 5 specialist agents with isolated memory
+    - SAS: 1 agent switching roles, prone to memory/role confusion
     """
+
+    # Same stage order as Multi-Agent System
+    STAGES = ["tech1", "tech2", "sysdes", "leader", "hr"]
+
+    # Stage descriptions for prompt injection
+    STAGE_DESCRIPTIONS = {
+        "tech1": "技术一面 - 基础算法与代码能力筛查",
+        "tech2": "技术二面 - 深度追问、找反例、边界条件施压",
+        "sysdes": "系统设计 - 系统设计与架构权衡",
+        "leader": "Leader面 - 项目深挖与技术领导力",
+        "hr": "HR面 - 行为面试与文化契合度"
+    }
 
     def __init__(
         self,
@@ -59,6 +74,10 @@ class SingleAgentOrchestrator:
         self.plus_call_count = 0
         self.flash_call_count = 0
 
+        # Stage management - same as MAS
+        self.current_stage_index = 0
+        self.stage_turn_counts = {stage: 0 for stage in self.STAGES}
+
         # Load prompt
         prompt_path = Path(__file__).parent / "prompts" / "single_agent.txt"
         self.system_prompt = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else self._default_prompt()
@@ -74,14 +93,25 @@ class SingleAgentOrchestrator:
 Ask one question at a time. Adapt your questions based on the candidate's responses.
 Be thorough but concise."""
 
+    def _get_current_stage(self) -> str:
+        """Get current interview stage."""
+        return self.STAGES[self.current_stage_index]
+
+    def _get_stage_config(self, stage: str) -> dict:
+        """Get configuration for a stage (same defaults as MAS)."""
+        defaults = {
+            "tech1": {"max_turns": 4},
+            "tech2": {"max_turns": 4},
+            "sysdes": {"max_turns": 3},
+            "leader": {"max_turns": 2},
+            "hr": {"max_turns": 2}
+        }
+        return defaults.get(stage, {"max_turns": 3})
+
     def step(self, candidate_response: str) -> StepResult:
-        """Execute one interview step.
+        """Execute one interview step with stage progression.
 
-        Args:
-            candidate_response: The candidate's response to the previous question
-
-        Returns:
-            StepResult containing the next question and status
+        Flow: tech1 -> tech2 -> sysdes -> leader -> hr -> scribe (same as MAS)
         """
         # 1. Update state with candidate response
         self.state.candidate_response = candidate_response
@@ -98,7 +128,7 @@ Be thorough but concise."""
         if self.turn_count >= max_turns:
             report = self._generate_final_report()
             return StepResult(
-                agent="interviewer",
+                agent="scribe",
                 question="",
                 finished=True,
                 report=report,
@@ -110,13 +140,25 @@ Be thorough but concise."""
                 total_flash_token_consumed=self.total_flash_token_consumed
             )
 
-        # 3. Build context and generate question (using full model for main interview)
-        messages = self._build_messages()
+        # 3. Determine current stage (same progression as MAS)
+        current_stage = self._get_current_stage()
+        self.stage_turn_counts[current_stage] += 1
 
-        # 4. Estimate tokens before call
+        # 4. Check if we should advance to next stage
+        stage_config = self._get_stage_config(current_stage)
+        if self.stage_turn_counts[current_stage] >= stage_config["max_turns"]:
+            if self.current_stage_index < len(self.STAGES) - 1:
+                self.current_stage_index += 1
+                current_stage = self._get_current_stage()
+                self.stage_turn_counts[current_stage] = 1  # First turn of new stage
+
+        # 5. Build context with stage information
+        messages = self._build_messages_with_stage(current_stage)
+
+        # 6. Estimate tokens before call
         estimated_tokens = estimate_tokens(messages)
 
-        # 5. Call LLM (using full model - qwen-plus)
+        # 7. Call LLM (using full model - qwen-plus)
         model_used = settings.qwen_plus_model
         try:
             response = llm.invoke(messages, model_name=model_used, temperature=0.7)
@@ -136,19 +178,21 @@ Be thorough but concise."""
             except Exception:
                 response = f"[Error generating question: {str(e)}] Could you tell me more about your technical background?"
 
-        # 6. Update state
+        # 8. Update state
         self.state.unified_history.append({
             "role": "assistant",
-            "content": response
+            "content": response,
+            "name": current_stage  # Tag message with stage for analysis
         })
         self.state.last_question = response
         self.state.turn = self.turn_count
+        self.state.current_agent = current_stage  # Same as MAS
 
-        # 7. Create transfer package for record
-        self._create_transfer_package(response)
+        # 9. Create transfer package for record
+        self._create_transfer_package(response, current_stage)
 
         return StepResult(
-            agent="interviewer",
+            agent=current_stage,  # Return current stage as agent name (same as MAS)
             question=response,
             finished=False,
             report="",
@@ -160,16 +204,32 @@ Be thorough but concise."""
             total_flash_token_consumed=self.total_flash_token_consumed
         )
 
-    def _build_messages(self) -> List[Dict[str, str]]:
-        """Build message list for LLM call."""
-        messages = [{"role": "system", "content": self.system_prompt}]
+    def _build_messages_with_stage(self, current_stage: str) -> List[Dict[str, str]]:
+        """Build message list with explicit stage information.
+
+        Unlike MAS where each agent only sees their own history, SAS gives the
+        single agent ALL conversation history, potentially causing role confusion.
+        """
+        # Build stage-specific system prompt
+        stage_desc = self.STAGE_DESCRIPTIONS.get(current_stage, "面试环节")
+        stage_prompt = f"""{self.system_prompt}
+
+【当前阶段】你现在正在进行：{stage_desc}
+
+重要提醒：
+1. 你是一位面试官，现在正在扮演"{current_stage}"的角色
+2. 请确保你的问题符合当前阶段的定位
+3. 你可以看到之前的全部对话历史，但要注意维持当前阶段的角色一致性
+4. 在阶段切换时，要主动调整提问风格和关注点
+"""
+        messages = [{"role": "system", "content": stage_prompt}]
 
         # Add context from resume and JD
         context_parts = []
         if self.state.resume_text:
-            context_parts.append(f"Candidate Resume:\n{self.state.resume_text[:2000]}")
+            context_parts.append(f"候选人简历：\n{self.state.resume_text[:2000]}")
         if self.state.jd_text:
-            context_parts.append(f"Job Description:\n{self.state.jd_text[:2000]}")
+            context_parts.append(f"职位描述：\n{self.state.jd_text[:2000]}")
 
         if context_parts:
             messages.append({
@@ -177,15 +237,17 @@ Be thorough but concise."""
                 "content": "\n\n".join(context_parts)
             })
 
-        # Add conversation history (last 10 messages)
-        history = self.state.unified_history[-10:] if len(self.state.unified_history) > 10 else self.state.unified_history
+        # Add ALL conversation history (this is where role confusion can happen!)
+        # Unlike MAS where agents are isolated, SAS sees everything
+        history = self.state.unified_history[-15:] if len(self.state.unified_history) > 15 else self.state.unified_history
         messages.extend(history)
 
-        # Add turn indicator
+        # Add stage indicator with turn info
+        stage_turn = self.stage_turn_counts[current_stage]
         max_turns = self.state.config.total_max_turns if self.state.config else self.state.max_turns
         messages.append({
             "role": "user",
-            "content": f"[Turn {self.turn_count}/{max_turns}] Continue the interview."
+            "content": f"[全局第 {self.turn_count}/{max_turns} 轮，当前阶段 {current_stage} 第 {stage_turn} 轮] 请继续面试。"
         })
 
         return messages
@@ -236,7 +298,7 @@ Keep it brief (3-5 bullet points)."""
                 lines.append(f"Interviewer: {content}")
         return "\n\n".join(lines[-20:])  # Last 20 exchanges
 
-    def _create_transfer_package(self, question: str) -> None:
+    def _create_transfer_package(self, question: str, stage: str) -> None:
         """Create a transfer package for record keeping."""
         # Simplified distillate for baseline
         distillate = MemoryDistillate(
@@ -248,11 +310,11 @@ Keep it brief (3-5 bullet points)."""
 
         package = TransferPackage(
             session_id=self.state.session_id,
-            from_agent="interviewer",
-            to_agent="interviewer",
+            from_agent=stage,  # Track actual stage
+            to_agent=stage,
             round_completed=self.turn_count,
             distillate=distillate,
-            raw_digest=question[:500],
+            raw_digest=f"[{stage}] {question[:500]}",
             budget_consumed=self.token_consumed,
             agent_question=question
         )

@@ -74,7 +74,7 @@ class TestSingleAgentOrchestrator:
 
     @patch('interview_crew.baseline.single_agent_orchestrator.llm.invoke')
     def test_step_with_mock_llm(self, mock_invoke):
-        """Test step method with mocked LLM."""
+        """Test step method with mocked LLM - now returns stage name like MAS."""
         mock_invoke.return_value = "Test question from LLM"
 
         state = InterviewState(
@@ -85,10 +85,12 @@ class TestSingleAgentOrchestrator:
 
         result = orchestrator.step("Hello, I'm a candidate")
 
-        assert result.agent == "interviewer"
+        # Now returns current stage (tech1) instead of fixed "interviewer"
+        assert result.agent == "tech1"  # First stage
         assert result.question == "Test question from LLM"
         assert result.finished is False
         assert orchestrator.turn_count == 1
+        assert orchestrator.current_stage_index == 0  # Still in first stage
 
     @patch('interview_crew.baseline.single_agent_orchestrator.llm.invoke')
     def test_interview_finishes_after_max_turns(self, mock_invoke):
@@ -213,6 +215,40 @@ class TestBaselineIntegration:
         # llm_call_count may be less than 3 because final report generation uses different logic
         assert orchestrator.llm_call_count >= 2
         assert len(state.unified_history) > 0
+
+    def test_stage_progression(self):
+        """Test that stages progress in MAS order: tech1 -> tech2 -> sysdes -> leader -> hr"""
+        state = InterviewState(
+            session_id="test-stage-progression",
+            config=InterviewConfig(total_max_turns=20)
+        )
+        orchestrator = SingleAgentOrchestrator(state)
+
+        # Check initial stage
+        assert orchestrator._get_current_stage() == "tech1"
+        assert orchestrator.STAGES == ["tech1", "tech2", "sysdes", "leader", "hr"]
+
+        # Simulate advancing through stages
+        orchestrator.current_stage_index = 1
+        assert orchestrator._get_current_stage() == "tech2"
+
+        orchestrator.current_stage_index = 4
+        assert orchestrator._get_current_stage() == "hr"
+
+    def test_stage_config(self):
+        """Test stage configuration matches MAS defaults."""
+        state = InterviewState(
+            session_id="test-config",
+            config=InterviewConfig(total_max_turns=10)
+        )
+        orchestrator = SingleAgentOrchestrator(state)
+
+        # Check default stage configs match MAS
+        assert orchestrator._get_stage_config("tech1")["max_turns"] == 4
+        assert orchestrator._get_stage_config("tech2")["max_turns"] == 4
+        assert orchestrator._get_stage_config("sysdes")["max_turns"] == 3
+        assert orchestrator._get_stage_config("leader")["max_turns"] == 2
+        assert orchestrator._get_stage_config("hr")["max_turns"] == 2
 
     def test_mode_identification(self):
         """Test that orchestrator identifies as single_agent mode."""
