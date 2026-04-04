@@ -3,11 +3,20 @@
 All tools use the project's LLMClient to generate meaningful responses.
 Each tool has a fallback to a safe stub in case of LLM failure.
 """
-from typing import Any, List
+from typing import Any, List, Optional
 import re
 from difflib import SequenceMatcher
+from urllib.parse import urlparse
 
 from interview_crew.llm.client import llm
+
+
+# Lazy import for web fetching
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
 
 
 def _safe_llm_call(messages: list, model: str = "qwen3.5-flash", temperature: float = 0.7, fallback: str = "") -> str:
@@ -222,3 +231,81 @@ def red_flag_detector(text: str) -> list:
         red_flags.append(f"[LLM检测到] {llm_result}")
 
     return red_flags if red_flags else []
+
+
+def web_fetch(url: str, max_chars: int = 3000) -> str:
+    """Fetch and clean content from a URL.
+
+    Basic filtering applied:
+    - Removes script, style, nav, footer, header tags
+    - Limits output size
+    - For GitHub repos, fetches README if available
+    """
+    if not HAS_REQUESTS:
+        return "[web_fetch] requests library not available. Install with: pip install requests"
+
+    # Handle GitHub URLs - convert to raw README URL
+    parsed = urlparse(url)
+    github_readme_url = None
+    if parsed.netloc == "github.com":
+        # Convert https://github.com/user/repo to raw README
+        path_parts = parsed.path.strip("/").split("/")
+        if len(path_parts) >= 2:
+            user, repo = path_parts[0], path_parts[1]
+            # Try common README paths
+            github_readme_url = f"https://raw.githubusercontent.com/{user}/{repo}/main/README.md"
+
+    urls_to_try = [github_readme_url, url] if github_readme_url else [url]
+
+    for try_url in urls_to_try:
+        if not try_url:
+            continue
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            response = requests.get(try_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.text
+
+            # If it's markdown/README, return as-is with truncation
+            if try_url.endswith(".md") or "README" in try_url:
+                return _clean_content(content, max_chars, is_html=False)
+
+            # For HTML, clean it up
+            return _clean_content(content, max_chars, is_html=True)
+
+        except Exception as e:
+            if try_url == urls_to_try[-1]:  # Last URL to try
+                return f"[web_fetch] Error fetching {url}: {str(e)[:100]}"
+            continue
+
+    return f"[web_fetch] Failed to fetch {url}"
+
+
+def _clean_content(content: str, max_chars: int, is_html: bool = True) -> str:
+    """Clean and truncate content."""
+    if is_html:
+        # Remove script and style tags and their contents
+        content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        # Remove nav, footer, header, aside tags and their contents
+        content = re.sub(r'<nav[^>]*>.*?</nav>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<footer[^>]*>.*?</footer>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<header[^>]*>.*?</header>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<aside[^>]*>.*?</aside>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        # Remove all remaining HTML tags
+        content = re.sub(r'<[^>]+>', ' ', content)
+        # Decode common HTML entities
+        content = content.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        content = content.replace('&quot;', '"').replace('&#39;', "'")
+
+    # Normalize whitespace
+    content = re.sub(r'\s+', ' ', content)
+    content = content.strip()
+
+    # Truncate if too long
+    if len(content) > max_chars:
+        content = content[:max_chars] + f"\n... [truncated, total: {len(content)} chars]"
+
+    return f"[web_fetch result]\n{content}"

@@ -12,7 +12,7 @@ _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "tech2": {
         "models": [settings.qwen_plus_model, settings.qwen_flash_model],
-        "tools": ["rag_query", "deep_search", "counter_example_gen", "stress_trigger", "code_generator", "code_executor"],
+        "tools": ["rag_query", "deep_search", "counter_example_gen", "stress_trigger", "code_generator", "code_executor", "web_fetch"],
         "max_calls_per_round": 4,
         "enable_search": True,
         "budget": settings.budget_tech2,
@@ -26,7 +26,7 @@ _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "leader": {
         "models": [settings.qwen_plus_model],
-        "tools": ["consistency_checker", "project_analyzer"],
+        "tools": ["consistency_checker", "project_analyzer", "web_fetch"],
         "max_calls_per_round": 2,
         "enable_search": False,
         "budget": settings.budget_leader,

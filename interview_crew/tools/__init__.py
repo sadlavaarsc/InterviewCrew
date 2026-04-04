@@ -10,6 +10,7 @@ from interview_crew.tools.stubs import (
     cross_ref_checker,
     consistency_checker,
     red_flag_detector,
+    web_fetch,
 )
 
 # Register all tools to the global registry
@@ -23,6 +24,7 @@ tool_registry.register("tradeoff_analyzer", tradeoff_analyzer)
 tool_registry.register("cross_ref_checker", cross_ref_checker)
 tool_registry.register("consistency_checker", consistency_checker)
 tool_registry.register("red_flag_detector", red_flag_detector)
+tool_registry.register("web_fetch", web_fetch)
 
 __all__ = [
     "ToolPolicy",
@@ -37,4 +39,5 @@ __all__ = [
     "cross_ref_checker",
     "consistency_checker",
     "red_flag_detector",
+    "web_fetch",
 ]
