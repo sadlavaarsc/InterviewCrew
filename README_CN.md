@@ -43,30 +43,54 @@
 
 ## 🧪 单 Agent Baseline
 
-InterviewCrew 提供**单 Agent 基线**用于与多 Agent 系统进行量化对比。两种模式暴露完全相同的 API，便于进行 A/B 测试。
+InterviewCrew 提供**单 Agent 基线**用于与多 Agent 系统进行量化对比。两种模式暴露完全相同的 API，并遵循相同的面试流程，便于进行公平的 A/B 测试。
 
 ### 快速对比
 
 | 特性 | 多 Agent (MAS) | 单 Agent (SAS Baseline) |
 |------|---------------|------------------------|
-| 架构 | 5 位专业面试官 + 编排器 | 1 位全能面试官 |
-| 记忆 | 每位面试官独立 | 统一历史记录 |
-| 模型策略 | 每轮独立预算与降级 | 主面试用 Plus，报告用 Flash |
-| 适用场景 | 生产级真实模拟 | 对比基线测试 |
+| **架构** | 5 位专业面试官 + 编排器 | 1 位全能面试官 |
+| **面试流程** | `tech1 → tech2 → sysdes → leader → hr` | 相同的硬编码工作流 |
+| **记忆** | 每位面试官独立 | **统一历史（所有阶段可见）** |
+| **角色切换** | 更换 Agent 实例 | **动态 Prompt 拼接** |
+| **模型策略** | 每轮独立预算与降级 | 主面试用 Plus，报告用 Flash |
+| **核心挑战** | 协调开销 | **角色串戏与记忆污染** |
+
+### SAS 如何"切换角色"
+
+与 MAS 加载不同 Agent 实例不同，SAS 通过每次调用时动态构建 System Prompt 来"换角色"：
+
+```python
+# 每次调用前，SAS 构建阶段专属提示词
+stage_prompt = f"""{base_prompt}
+
+【当前阶段】你现在正在进行：{stage_desc}
+
+重要提醒：
+1. 你是一位面试官，现在正在扮演"{current_stage}"的角色
+2. 你可以看到之前的全部对话历史，但要注意维持当前阶段的角色一致性
+3. 阶段切换时主动调整提问风格和关注点
+"""
+```
+
+**这故意给 SAS 制造了挑战**：
+- **上下文长度**：必须处理 15+ 轮完整历史
+- **角色串戏**：很难"忘记"前一阶段的人设
+- **记忆污染**：Tech-2 的问题可能影响 HR 的评估
 
 ### 使用方式
 
 ```bash
-# 多 Agent 模式（默认）
+# 多 Agent 模式（默认）- 真正的专家，记忆隔离
 curl -X POST http://localhost:8000/sessions \
   -d '{"mode": "multi_agent", "total_max_turns": 15}'
 
-# 单 Agent 基线
+# 单 Agent 基线 - 一个 Agent 扮演 5 个角色，全量历史可见
 curl -X POST http://localhost:8000/sessions \
   -d '{"mode": "single_agent", "total_max_turns": 15}'
 ```
 
-两种模式使用完全相同的 `/step` 和 `/sessions/{id}` 接口。
+两种模式返回相同的响应格式，`agent` 字段都是 `tech1` / `tech2` / ...。
 
 ---
 

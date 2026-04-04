@@ -43,30 +43,54 @@
 
 ## 🧪 Single Agent Baseline
 
-InterviewCrew includes a **Single Agent Baseline** for quantitative comparison with the Multi-Agent System. Both modes expose identical APIs, making it easy to run A/B tests.
+InterviewCrew includes a **Single Agent Baseline** for quantitative comparison with the Multi-Agent System. Both modes expose identical APIs and follow the same interview flow, making it easy to run A/B tests.
 
 ### Quick Comparison
 
 | Feature | Multi-Agent | Single-Agent Baseline |
 |---------|-------------|----------------------|
-| Architecture | 5 specialist agents + orchestrator | 1 all-in-one agent |
-| Memory | Isolated per agent | Unified history |
-| Model Strategy | Per-agent budget with downgrade | Plus for interview, Flash for report |
-| Use Case | Production-grade simulation | Baseline for comparison |
+| **Architecture** | 5 specialist agents + orchestrator | 1 all-in-one agent |
+| **Interview Flow** | `tech1 → tech2 → sysdes → leader → hr` | Same hardcoded workflow |
+| **Memory** | Isolated per agent | **Unified history (all stages visible)** |
+| **Role Switching** | Swap Agent instance | **Dynamic prompt拼接** |
+| **Model Strategy** | Per-agent budget with downgrade | Plus for interview, Flash for report |
+| **Key Challenge** | Coordination overhead | **Role confusion & memory pollution** |
+
+### How SAS "Switches Roles"
+
+Unlike MAS which loads different Agent instances, SAS dynamically builds the system prompt for each turn:
+
+```python
+# Before each LLM call, SAS constructs stage-specific prompt
+stage_prompt = f"""{base_prompt}
+
+【当前阶段】你现在正在进行：{stage_desc}
+
+重要提醒：
+1. 你是一位面试官，现在正在扮演"{current_stage}"的角色
+2. 你可以看到之前的全部对话历史，但要注意维持当前阶段的角色一致性
+3. 阶段切换时主动调整提问风格和关注点
+"""
+```
+
+**This creates intentional challenges for SAS:**
+- **Context Length**: Must process 15+ rounds of full history
+- **Role Confusion**: Difficult to "forget" previous stage's persona
+- **Memory Pollution**: Tech-2's questions may influence HR's evaluation
 
 ### Usage
 
 ```bash
-# Multi-Agent mode (default)
+# Multi-Agent mode (default) - True specialists with isolated memory
 curl -X POST http://localhost:8000/sessions \
   -d '{"mode": "multi_agent", "total_max_turns": 15}'
 
-# Single-Agent Baseline
+# Single-Agent Baseline - One agent playing 5 roles with full history
 curl -X POST http://localhost:8000/sessions \
   -d '{"mode": "single_agent", "total_max_turns": 15}'
 ```
 
-Both modes use the same `/step` and `/sessions/{id}` endpoints.
+Both modes return the same response format with `agent: "tech1" | "tech2" | ...`.
 
 ---
 

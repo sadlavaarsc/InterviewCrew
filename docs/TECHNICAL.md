@@ -377,19 +377,87 @@ class JDParsingStrategy(ABC):
 | **记忆** | 每位 Agent 独立历史 | 统一历史记录 |
 | **模型策略** | 每轮独立预算控制 + 自动降级 | 主面试用 Plus，报告用 Flash |
 | **代码面试** | 完整支持（coding → reflect） | 不支持（简化设计） |
+| **阶段切换** | `_next_state()` 代码控制 | **相同的硬编码工作流** |
 | **配置** | 支持按 Agent 启用/禁用 | 仅支持总轮数配置 |
 
-### 7.2 使用方式
+### 7.2 SAS 的"角色切换"实现
+
+SAS 最大的挑战是**如何用单个 Agent 模拟多个专家**。实现方式：
+
+#### 阶段定义（与 MAS 完全一致）
 
 ```python
-# Multi-Agent 模式（默认）
-curl -X POST /sessions -d '{"mode": "multi_agent"}'
+STAGES = ["tech1", "tech2", "sysdes", "leader", "hr"]
 
-# Single-Agent 模式
-curl -X POST /sessions -d '{"mode": "single_agent"}'
+STAGE_DESCRIPTIONS = {
+    "tech1": "技术一面 - 基础算法与代码能力筛查",
+    "tech2": "技术二面 - 深度追问、找反例、边界条件施压",
+    "sysdes": "系统设计 - 系统设计与架构权衡",
+    "leader": "Leader面 - 项目深挖与技术领导力",
+    "hr": "HR面 - 行为面试与文化契合度"
+}
 ```
 
-### 7.3 Token 统计设计
+#### 动态 Prompt 拼接（每次调用都重新构建）
+
+```python
+def _build_messages_with_stage(self, current_stage: str):
+    # 1. 基础 Prompt（来自 single_agent.txt）
+    base_prompt = self.system_prompt
+
+    # 2. 动态注入当前阶段信息
+    stage_desc = self.STAGE_DESCRIPTIONS[current_stage]
+    stage_prompt = f"""{base_prompt}
+
+【当前阶段】你现在正在进行：{stage_desc}
+
+重要提醒：
+1. 你是一位面试官，现在正在扮演"{current_stage}"的角色
+2. 请确保你的问题符合当前阶段的定位
+3. 你可以看到之前的全部对话历史，但要注意维持当前阶段的角色一致性
+4. 在阶段切换时，要主动调整提问风格和关注点
+"""
+    messages = [{"role": "system", "content": stage_prompt}]
+
+    # 3. 添加全部对话历史（与 MAS 的隔离形成对比）
+    messages.extend(self.state.unified_history)
+
+    return messages
+```
+
+#### 阶段切换逻辑（代码控制，与 MAS 相同）
+
+```python
+def step(self, candidate_response: str):
+    # 1. 确定当前阶段
+    current_stage = self._get_current_stage()  # 如 "tech1"
+    self.stage_turn_counts[current_stage] += 1
+
+    # 2. 检查是否需要切换阶段
+    stage_config = self._get_stage_config(current_stage)
+    if self.stage_turn_counts[current_stage] >= stage_config["max_turns"]:
+        self.current_stage_index += 1  # 切换到下一阶段
+        current_stage = self._get_current_stage()
+
+    # 3. 构建阶段专属 Prompt 并调用 LLM
+    messages = self._build_messages_with_stage(current_stage)
+    response = llm.invoke(messages, model_name="qwen3.5-plus")
+
+    return StepResult(agent=current_stage, question=response, ...)
+```
+
+### 7.3 SAS 的固有挑战
+
+SAS 的设计**故意**保留了单 Agent 的局限，以便公平对比：
+
+| 挑战 | 原因 | 预期表现 |
+|------|------|---------|
+| **角色串戏** | 同一模型实例，只是改了 Prompt 前缀 | 可能在 HR 阶段还保持 tech2 的追问风格 |
+| **记忆污染** | 看到全部 15+ 轮历史 | Tech-2 的追问可能影响 HR 对候选人的印象 |
+| **上下文过长** | 无记忆蒸馏，全量传递 | Token 消耗可能高于 MAS |
+| **无冲突仲裁** | 单 Agent 自说自话 | 可能出现前后评估矛盾 |
+
+### 7.4 Token 统计设计
 
 Baseline 和 MAS 使用相同的 `StepResult` 结构，支持按模型级别细分的 Token 统计：
 
