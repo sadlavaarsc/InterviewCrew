@@ -196,6 +196,75 @@ def submit_code(session_id: str, req: SubmitCodeRequest) -> SubmitCodeResponse:
     orchestrator.state.append_agent_history(agent_name, assistant_msg)
     orchestrator.state.append_unified(assistant_msg)
 
+    # 推进 sub_stage: coding -> reflect
+    new_sub_stage = orchestrator.state.advance_sub_stage(agent_name)
+
+    # 如果进入 reflect 阶段，自动触发 reflect 阶段的问题生成
+    if new_sub_stage == "reflect":
+        from interview_crew.memory.distiller import distill_memory
+        from interview_crew.memory.agent_mailbox import build_agent_messages
+        from interview_crew.llm.client import llm
+
+        # 蒸馏记忆
+        memory_distillate = distill_memory(
+            orchestrator.state.unified_history,
+            orchestrator.state.session_id,
+            orchestrator.state.turn,
+        )
+
+        # 构建 reflect 阶段上下文
+        reflect_context = agent.build_reflect_context(memory_distillate, orchestrator.state)
+
+        # 构建消息
+        messages = build_agent_messages(
+            orchestrator.state.get_agent_history(agent_name),
+            f"{agent.system_prompt}\n\n{reflect_context}",
+            "",  # candidate_response 为空，因为这是自动触发
+            orchestrator._business_context_text(),
+            orchestrator.state.resume_text,
+        )
+
+        # 调用 LLM 生成 reflect 阶段问题
+        raw = llm.invoke(messages, model_name=agent.preferred_model, temperature=agent.default_temperature)
+
+        # 解析输出
+        try:
+            import json
+            data = json.loads(raw.strip())
+            from interview_crew.protocol.schemas import AgentOutput
+            reflect_output = AgentOutput(**data)
+        except Exception:
+            from interview_crew.protocol.schemas import AgentOutput
+            reflect_output = AgentOutput(
+                question="请总结一下今天面试的表现，包括：1) 你觉得自己回答得最好的地方；2) 有哪些可以改进的地方；3) 有什么想补充的？",
+                evaluation_score=0.5,
+                key_weaknesses=[],
+                follow_up_candidates=[],
+                reasoning="parse error, using default reflect question",
+            )
+
+        # 记录 reflect 问题到历史
+        reflect_msg = {
+            "role": "assistant",
+            "name": agent_name,
+            "content": reflect_output.question,
+        }
+        orchestrator.state.append_agent_history(agent_name, reflect_msg)
+        orchestrator.state.append_unified(reflect_msg)
+
+        # 更新 sub_stage turn counter
+        orchestrator.state.increment_stage_turns(agent_name)
+
+        return SubmitCodeResponse(
+            compile_success=result.success,
+            compile_output=result.compile_output,
+            test_results=[TestResult(**t.__dict__) for t in result.test_results],
+            overall_passed=result.overall_passed,
+            execution_time_ms=result.execution_time_ms,
+            next_question=follow_up + "\n\n" + reflect_output.question,
+            current_sub_stage=new_sub_stage,
+        )
+
     return SubmitCodeResponse(
         compile_success=result.success,
         compile_output=result.compile_output,
