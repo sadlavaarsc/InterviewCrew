@@ -1,5 +1,5 @@
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from interview_crew.state import InterviewState
 from interview_crew.orchestrator.engine import Orchestrator, StepResult
 from interview_crew.services.code_sandbox import code_sandbox
+from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig
 
 app = FastAPI(title="InterviewCrew API", version="0.1.0")
 
@@ -14,8 +15,59 @@ app = FastAPI(title="InterviewCrew API", version="0.1.0")
 _sessions: Dict[str, Orchestrator] = {}
 
 
+class RoundConfigInput(BaseModel):
+    """Input for per-round configuration."""
+    enabled: bool = True
+    max_turns: int = Field(default=4, ge=1, le=20)
+    max_chat_turns: int = Field(default=2, ge=1, le=10)
+    max_reflect_turns: int = Field(default=1, ge=1, le=5)
+
+
 class CreateSessionRequest(BaseModel):
+    """Request to create a new interview session.
+
+    Examples:
+        # Default full interview (all rounds, ~20-30 turns)
+        {}
+
+        # Only tech rounds (quick technical screening)
+        {
+            "total_max_turns": 10,
+            "rounds_config": {
+                "tech1": {"enabled": true, "max_turns": 4},
+                "tech2": {"enabled": true, "max_turns": 4},
+                "sysdes": {"enabled": false},
+                "leader": {"enabled": false},
+                "hr": {"enabled": false}
+            }
+        }
+
+        # Skip sysdes, only tech1+tech2+leader+hr
+        {
+            "rounds_config": {
+                "sysdes": {"enabled": false}
+            }
+        }
+
+        # Quick screening (minimal rounds)
+        {
+            "total_max_turns": 5,
+            "rounds_config": {
+                "tech1": {"enabled": true, "max_turns": 3, "max_chat_turns": 1},
+                "hr": {"enabled": true, "max_turns": 2}
+            }
+        }
+    """
+    # Legacy field (deprecated, use config.total_max_turns)
     max_turns: int = Field(default=6, ge=1, le=50)
+
+    # New configuration
+    total_max_turns: int = Field(default=30, ge=1, le=100, description="Global max turns across all rounds")
+    rounds_config: Optional[Dict[str, RoundConfigInput]] = Field(
+        default=None,
+        description="Per-round configuration (enable/disable, max turns per round)"
+    )
+
     candidate_response: str = ""
     resume_path: str | None = None
     jd_path: str | None = None
@@ -40,9 +92,11 @@ class StepResponse(BaseModel):
 class SessionStateResponse(BaseModel):
     session_id: str
     turn: int
-    max_turns: int
+    max_turns: int  # Legacy field
+    total_max_turns: int  # New: from config
     status: str
     current_agent: str
+    enabled_rounds: list  # New: list of enabled rounds
     last_question: str
     candidate_response: str
     resume_text: str
@@ -87,14 +141,23 @@ class CodingTaskResponse(BaseModel):
     sub_stage: str = ""
 
 
-def _state_to_dict(state: InterviewState) -> dict:
+def _state_to_dict(state: InterviewState, orchestrator: Orchestrator = None) -> dict:
     """Serialize InterviewState to a JSON-friendly dict."""
+    # Get enabled rounds from orchestrator if available
+    enabled_rounds = []
+    if orchestrator and hasattr(orchestrator, '_enabled_rounds'):
+        enabled_rounds = orchestrator._enabled_rounds
+    elif state.config:
+        enabled_rounds = state.config.get_enabled_rounds()
+
     return {
         "session_id": state.session_id,
         "turn": state.turn,
         "max_turns": state.max_turns,
+        "total_max_turns": state.config.total_max_turns if state.config else state.max_turns,
         "status": state.status,
         "current_agent": state.current_agent,
+        "enabled_rounds": enabled_rounds,
         "last_question": state.last_question,
         "candidate_response": state.candidate_response,
         "resume_text": state.resume_text,
@@ -109,10 +172,35 @@ def _state_to_dict(state: InterviewState) -> dict:
 @app.post("/sessions", response_model=CreateSessionResponse)
 def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = str(uuid.uuid4())
+
+    # Build interview config from request
+    # Use max_turns if total_max_turns not explicitly set (backward compatible)
+    effective_total_turns = req.total_max_turns if req.total_max_turns != 30 else req.max_turns
+    config = InterviewConfig(total_max_turns=effective_total_turns)
+
+    if req.rounds_config:
+        for round_name, round_input in req.rounds_config.items():
+            if round_name in config.rounds:
+                config.rounds[round_name] = InterviewRoundConfig(
+                    enabled=round_input.enabled,
+                    max_turns=round_input.max_turns,
+                    max_chat_turns=round_input.max_chat_turns,
+                    max_reflect_turns=round_input.max_reflect_turns
+                )
+            else:
+                # Add new custom round config
+                config.rounds[round_name] = InterviewRoundConfig(
+                    enabled=round_input.enabled,
+                    max_turns=round_input.max_turns,
+                    max_chat_turns=round_input.max_chat_turns,
+                    max_reflect_turns=round_input.max_reflect_turns
+                )
+
     state = InterviewState(
         session_id=session_id,
         turn=0,
-        max_turns=req.max_turns,
+        max_turns=req.max_turns,  # Legacy field
+        config=config,
         candidate_response=req.candidate_response,
         resume_path=req.resume_path,
         jd_path=req.jd_path,
@@ -141,7 +229,7 @@ def get_session(session_id: str) -> SessionStateResponse:
     orchestrator = _sessions.get(session_id)
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return SessionStateResponse(**_state_to_dict(orchestrator.state))
+    return SessionStateResponse(**_state_to_dict(orchestrator.state, orchestrator))
 
 
 @app.post("/sessions/{session_id}/submit-code", response_model=SubmitCodeResponse)

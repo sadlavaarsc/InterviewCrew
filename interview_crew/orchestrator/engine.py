@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict
 from pathlib import Path
 
 from interview_crew.state import InterviewState, Message
@@ -8,6 +8,8 @@ from interview_crew.protocol.schemas import (
     MemoryDistillate,
     AgentOutput,
     BusinessContext,
+    InterviewConfig,
+    InterviewRoundConfig,
 )
 from interview_crew.memory.distiller import distill_memory
 from interview_crew.llm.client import estimate_tokens
@@ -48,29 +50,36 @@ class Orchestrator:
             "scribe": ScribeAgent(),
         }
 
-        self._state_order: List[_StateMachine] = [
-            "screening",   # -> tech1
-            "tech1",       # -> tech2 (internal: chat -> coding -> reflect)
-            "tech2",       # -> system (internal: chat -> coding -> reflect)
-            "system",      # -> leader
-            "leader",      # -> hr
-            "hr",          # -> finished
-            "finished",
-        ]
-        _agent_to_state_index = {
-            "": 0,
-            "tech1": 1,
-            "tech2": 2,
-            "sysdes": 3,
-            "leader": 4,
-            "hr": 5,
-            "scribe": 6,
-        }
-        self._current_state_index = _agent_to_state_index.get(self.state.current_agent, 0)
-        if self.state.status == "finished" or self.state.turn >= self.state.max_turns:
-            self._current_state_index = len(self._state_order) - 1
+        # New: Use config to determine enabled rounds and order
+        self._enabled_rounds = self.state.config.get_enabled_rounds()
+        self._current_round_index = self._get_current_round_index()
+
+        # Track per-round turn counts
+        self._round_turn_counts: Dict[str, int] = {}
+
+        # Check if current agent is already done (e.g., sub_stage == "done")
+        # If so, advance to next round
+        if self.state.current_agent in ["tech1", "tech2"]:
+            if self.state.get_sub_stage(self.state.current_agent) == "done":
+                self._current_round_index += 1
+
+        if self.state.status == "finished" or self.state.turn >= self._get_effective_max_turns():
+            self._current_round_index = len(self._enabled_rounds)
 
         self._maybe_load_files()
+
+    def _get_current_round_index(self) -> int:
+        """Get the index of current agent in enabled rounds."""
+        if not self.state.current_agent:
+            return 0
+        if self.state.current_agent in self._enabled_rounds:
+            return self._enabled_rounds.index(self.state.current_agent)
+        # If current agent not in enabled rounds (e.g., just finished one), find next
+        return len(self._enabled_rounds)
+
+    def _get_effective_max_turns(self) -> int:
+        """Get effective max turns (config takes precedence over legacy)."""
+        return self.state.config.total_max_turns if self.state.config else self.state.max_turns
 
     def _maybe_load_files(self) -> None:
         try:
@@ -86,16 +95,31 @@ class Orchestrator:
         except (IOError, UnicodeDecodeError) as e:
             self.state.jd_text = ""
 
-    def _next_state(self) -> _StateMachine:
+    def _next_agent(self) -> str:
+        """Determine next agent based on config-enabled rounds.
+
+        Returns "scribe" if no more rounds, or the next enabled agent name.
+        """
         if self.state.conflict_flag:
             # Arbitration mode: route to tech2 for reconciliation
             self.state.conflict_flag = False
-            return "tech2"
-        if self._current_state_index >= len(self._state_order) - 1:
-            return "finished"
-        state_name = self._state_order[self._current_state_index]
-        self._current_state_index += 1
-        return state_name
+            if "tech2" in self._enabled_rounds:
+                return "tech2"
+
+        # Check if current round has reached its turn limit
+        if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
+            round_config = self.state.config.get_round_config(self.state.current_agent)
+            current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
+            if current_round_turns >= round_config.max_turns:
+                # Force advance to next round
+                pass  # Will advance below
+
+        if self._current_round_index >= len(self._enabled_rounds):
+            return "scribe"
+
+        next_agent = self._enabled_rounds[self._current_round_index]
+        self._current_round_index += 1
+        return next_agent
 
     def step(self, candidate_response: str) -> StepResult:
         self.state.candidate_response = candidate_response
@@ -106,7 +130,8 @@ class Orchestrator:
             self.state.append_unified({"role": "user", "content": candidate_response})
 
         # Global turn limit check (applies even during sub-stages)
-        if self.state.turn >= self.state.max_turns:
+        effective_max_turns = self._get_effective_max_turns()
+        if self.state.turn >= effective_max_turns:
             self.state.status = "finished"
             report = self._generate_report()
             return StepResult(agent="scribe", question="", finished=True, report=report)
@@ -126,33 +151,26 @@ class Orchestrator:
                     # Sub-stages complete, advance to next main state
                     pass
 
-        # Determine next state
-        next_state = self._next_state()
-        if next_state == "finished" or self.state.turn >= self.state.max_turns:
+        # Determine next agent
+        next_agent = self._next_agent()
+        if next_agent == "scribe" or self.state.turn >= effective_max_turns:
             self.state.status = "finished"
             report = self._generate_report()
             return StepResult(agent="scribe", question="", finished=True, report=report)
 
-        # Map state to agent
-        _state_to_agent = {
-            "screening": "tech1",
-            "tech1": "tech2",
-            "tech2": "sysdes",
-            "system": "leader",
-            "leader": "hr",
-            "hr": "scribe",
-        }
-        agent_name = _state_to_agent.get(next_state, next_state)
-        self.state.current_agent = agent_name
+        self.state.current_agent = next_agent
+
+        # Track per-round turn count
+        self._round_turn_counts[next_agent] = self._round_turn_counts.get(next_agent, 0) + 1
 
         # Check if this is a Tech Agent with sub-stages
-        agent = self.agents[agent_name]
+        agent = self.agents[next_agent]
         if agent.has_sub_stages:
             # Reset sub-stage to beginning
-            self.state.reset_agent_stage(agent_name)
-            return self._process_tech_agent_sub_stage(agent_name, candidate_response)
+            self.state.reset_agent_stage(next_agent)
+            return self._process_tech_agent_sub_stage(next_agent, candidate_response)
 
-        return self._process_standard_agent(agent_name, candidate_response)
+        return self._process_standard_agent(next_agent, candidate_response)
 
     def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
         """Process Tech Agent with sub-stages (chat -> coding -> reflect)."""
@@ -262,13 +280,14 @@ class Orchestrator:
         # Update sub-stage turn counter
         self.state.increment_stage_turns(agent_name)
 
-        # Check if should advance sub-stage
-        if sub_stage == "chat" and self.state.get_stage_turns(agent_name) >= 2:
+        # Check if should advance sub-stage (use config limits)
+        round_config = self.state.config.get_round_config(agent_name)
+        if sub_stage == "chat" and self.state.get_stage_turns(agent_name) >= round_config.max_chat_turns:
             self.state.advance_sub_stage(agent_name)
         elif sub_stage == "coding":
             # coding stage waits for manual code submission via API
             pass
-        elif sub_stage == "reflect" and self.state.get_stage_turns(agent_name) >= 1:
+        elif sub_stage == "reflect" and self.state.get_stage_turns(agent_name) >= round_config.max_reflect_turns:
             self.state.advance_sub_stage(agent_name)
 
         # Build TransferPackage
@@ -385,15 +404,17 @@ class Orchestrator:
         return "\n".join(parts)
 
     def _peek_next_agent(self, current: str) -> str:
-        mapping = {
-            "tech1": "tech2",
-            "tech2": "sysdes",
-            "sysdes": "leader",
-            "leader": "hr",
-            "hr": "scribe",
-            "scribe": "scribe",
-        }
-        return mapping.get(current, "scribe")
+        """Peek next agent based on config-enabled rounds."""
+        if current == "scribe":
+            return "scribe"
+
+        # Find current in enabled rounds
+        if current in self._enabled_rounds:
+            idx = self._enabled_rounds.index(current)
+            if idx + 1 < len(self._enabled_rounds):
+                return self._enabled_rounds[idx + 1]
+
+        return "scribe"
 
     def _digest(self, candidate_response: str, question: str) -> str:
         return f"Candidate: {candidate_response[:100]}... | Agent: {question[:100]}..."

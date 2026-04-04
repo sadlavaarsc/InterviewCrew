@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
-from interview_crew.protocol.schemas import TransferPackage, BusinessContext, CodingProblem
+from interview_crew.protocol.schemas import TransferPackage, BusinessContext, CodingProblem, InterviewConfig
 
 
 Message = Dict[str, Any]  # {"role": str, "content": str, "name": Optional[str]}
@@ -10,7 +10,10 @@ Message = Dict[str, Any]  # {"role": str, "content": str, "name": Optional[str]}
 class InterviewState:
     session_id: str
     turn: int = 0
-    max_turns: int = 6
+    max_turns: int = 6  # Deprecated: use config.total_max_turns instead
+
+    # Interview configuration (new)
+    config: InterviewConfig = field(default_factory=InterviewConfig)
 
     candidate_response: str = ""
 

@@ -2,6 +2,86 @@ from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
 
 
+# ==================== Interview Configuration ====================
+
+class InterviewRoundConfig(BaseModel):
+    """Configuration for a single interview round (Agent).
+
+    Controls how many turns each agent gets and whether they are enabled.
+
+    Example:
+        {
+            "tech1": {"enabled": True, "max_turns": 4},
+            "tech2": {"enabled": True, "max_turns": 4},
+            "sysdes": {"enabled": False},  # Skip this round
+            "leader": {"enabled": True, "max_turns": 2},
+            "hr": {"enabled": True, "max_turns": 2}
+        }
+    """
+    enabled: bool = Field(default=True, description="Whether this round is enabled")
+    max_turns: int = Field(default=4, ge=1, le=20, description="Max turns for this agent (excluding sub-stages)")
+    # Sub-stage specific limits
+    max_chat_turns: int = Field(default=2, ge=1, le=10, description="Max turns in chat sub-stage")
+    max_reflect_turns: int = Field(default=1, ge=1, le=5, description="Max turns in reflect sub-stage")
+
+
+class InterviewConfig(BaseModel):
+    """Global interview configuration.
+
+    Controls the overall interview flow, which rounds are included,
+    and how many turns each round gets.
+
+    Example - Full interview (default):
+        config = InterviewConfig()
+
+    Example - Only tech rounds:
+        config = InterviewConfig(
+            rounds={
+                "tech1": InterviewRoundConfig(enabled=True, max_turns=4),
+                "tech2": InterviewRoundConfig(enabled=True, max_turns=4),
+                "sysdes": InterviewRoundConfig(enabled=False),
+                "leader": InterviewRoundConfig(enabled=False),
+                "hr": InterviewRoundConfig(enabled=False)
+            }
+        )
+
+    Example - Quick screening:
+        config = InterviewConfig(
+            total_max_turns=10,
+            rounds={
+                "tech1": InterviewRoundConfig(enabled=True, max_turns=3, max_chat_turns=1),
+                "hr": InterviewRoundConfig(enabled=True, max_turns=2)
+            }
+        )
+    """
+    # Overall limit (safety net)
+    total_max_turns: int = Field(default=30, ge=1, le=100, description="Global max turns across all rounds")
+
+    # Per-round configuration
+    rounds: Dict[str, InterviewRoundConfig] = Field(
+        default_factory=lambda: {
+            "tech1": InterviewRoundConfig(max_turns=4, max_chat_turns=2, max_reflect_turns=1),
+            "tech2": InterviewRoundConfig(max_turns=4, max_chat_turns=2, max_reflect_turns=1),
+            "sysdes": InterviewRoundConfig(max_turns=3, max_chat_turns=2, max_reflect_turns=1),
+            "leader": InterviewRoundConfig(max_turns=2, max_chat_turns=1, max_reflect_turns=1),
+            "hr": InterviewRoundConfig(max_turns=2, max_chat_turns=1, max_reflect_turns=1)
+        }
+    )
+
+    # Order of rounds (can be customized)
+    round_order: List[str] = Field(
+        default_factory=lambda: ["tech1", "tech2", "sysdes", "leader", "hr"]
+    )
+
+    def get_enabled_rounds(self) -> List[str]:
+        """Return list of enabled rounds in order."""
+        return [r for r in self.round_order if self.rounds.get(r, InterviewRoundConfig()).enabled]
+
+    def get_round_config(self, round_name: str) -> InterviewRoundConfig:
+        """Get config for a specific round, with defaults."""
+        return self.rounds.get(round_name, InterviewRoundConfig())
+
+
 # ==================== Coding Interview Models ====================
 
 class TestCase(BaseModel):
