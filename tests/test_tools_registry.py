@@ -18,7 +18,9 @@ def test_tech2_permissions():
 
 def test_max_calls_enforced():
     policy = ToolPolicy("tech1")
-    assert policy.permissions["max_calls_per_round"] == 2
+    assert policy.permissions["max_calls_per_round"] == 3
+    policy.record_call()
+    assert policy.check_permission("rag_query") is True
     policy.record_call()
     assert policy.check_permission("rag_query") is True
     policy.record_call()

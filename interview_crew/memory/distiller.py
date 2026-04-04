@@ -48,7 +48,14 @@ def distill_memory(raw_dialogue: List[Message], session_id: str, turn: int) -> M
         # Fallback: return a minimal valid distillate so the pipeline never breaks
         return MemoryDistillate(
             candidate_profile={"note": f"distill failed: {e}"},
-            competency_vector=[],
+            competency_vector=[
+                CompetencyTag(
+                    dimension="coding",
+                    score=0.5,
+                    evidence="distillation fallback due to parsing error",
+                    confidence=0.3,
+                )
+            ],
             doubt_list=[],
             contradiction_alerts=[],
             recommended_focus="继续按原流程提问",

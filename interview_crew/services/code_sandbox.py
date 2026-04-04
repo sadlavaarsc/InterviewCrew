@@ -11,6 +11,8 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from interview_crew.protocol.schemas import CodingProblem, TestCase
+
 
 @dataclass
 class TestResult:
@@ -47,21 +49,6 @@ class ExecutionResult:
         }
 
 
-@dataclass
-class CodingProblem:
-    """Represents a coding problem with test cases."""
-    title: str
-    description: str
-    difficulty: str  # easy, medium, hard
-    starter_code: str
-    test_cases: List[Dict]  # [{"input": "...", "expected": "..."}]
-    time_limit_sec: int = 2
-    memory_limit_mb: int = 256
-
-    def to_dict(self) -> Dict:
-        return asdict(self)
-
-
 class CodeSandbox:
     """
     Docker-based code execution sandbox.
@@ -77,7 +64,7 @@ class CodeSandbox:
     def execute(
         self,
         code: str,
-        test_cases: List[Dict],
+        test_cases: List,
         language: str = "python"
     ) -> ExecutionResult:
         """
@@ -99,7 +86,7 @@ class CodeSandbox:
     def _execute_docker(
         self,
         code: str,
-        test_cases: List[Dict],
+        test_cases: List,
         language: str
     ) -> ExecutionResult:
         """Execute code in Docker container (full implementation)."""
@@ -110,7 +97,7 @@ class CodeSandbox:
     def _execute_mock(
         self,
         code: str,
-        test_cases: List[Dict],
+        test_cases: List,
         language: str
     ) -> ExecutionResult:
         """
@@ -139,10 +126,13 @@ class CodeSandbox:
                 has_function = "def " in code or "class " in code
                 has_solution_logic = len(code.strip().split('\n')) > 3
 
+                input_data = tc.get("input", "") if isinstance(tc, dict) else getattr(tc, "input", "")
+                expected = tc.get("expected", "") if isinstance(tc, dict) else getattr(tc, "expected", "")
+
                 if has_function and has_solution_logic:
                     # Simulate 80% pass rate for reasonable-looking code
                     passed = True
-                    actual = tc.get("expected", "")
+                    actual = expected
                     error = ""
                 else:
                     passed = False
@@ -152,8 +142,8 @@ class CodeSandbox:
 
                 test_results.append(TestResult(
                     case_id=i + 1,
-                    input_data=tc.get("input", ""),
-                    expected=tc.get("expected", ""),
+                    input_data=input_data,
+                    expected=expected,
                     actual=actual,
                     passed=passed,
                     error_message=error
@@ -161,10 +151,12 @@ class CodeSandbox:
         else:
             # Compilation failed, all tests fail
             for i, tc in enumerate(test_cases):
+                input_data = tc.get("input", "") if isinstance(tc, dict) else getattr(tc, "input", "")
+                expected = tc.get("expected", "") if isinstance(tc, dict) else getattr(tc, "expected", "")
                 test_results.append(TestResult(
                     case_id=i + 1,
-                    input_data=tc.get("input", ""),
-                    expected=tc.get("expected", ""),
+                    input_data=input_data,
+                    expected=expected,
                     actual="",
                     passed=False,
                     error_message="Compilation failed"
@@ -210,7 +202,7 @@ class CodeSandbox:
             description=problem_template["description"],
             difficulty=difficulty,
             starter_code=problem_template["starter_code"],
-            test_cases=problem_template["test_cases"],
+            test_cases=[TestCase(**tc) for tc in problem_template["test_cases"]],
             time_limit_sec=2,
             memory_limit_mb=256
         )

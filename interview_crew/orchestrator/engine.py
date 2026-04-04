@@ -57,19 +57,34 @@ class Orchestrator:
             "hr",          # -> finished
             "finished",
         ]
-        self._current_state_index = 0
+        _agent_to_state_index = {
+            "": 0,
+            "tech1": 1,
+            "tech2": 2,
+            "sysdes": 3,
+            "leader": 4,
+            "hr": 5,
+            "scribe": 6,
+        }
+        self._current_state_index = _agent_to_state_index.get(self.state.current_agent, 0)
         if self.state.status == "finished" or self.state.turn >= self.state.max_turns:
             self._current_state_index = len(self._state_order) - 1
 
         self._maybe_load_files()
 
     def _maybe_load_files(self) -> None:
-        if self.state.resume_path and Path(self.state.resume_path).exists():
-            self.state.resume_text = Path(self.state.resume_path).read_text(encoding="utf-8")
-        if self.state.jd_path and Path(self.state.jd_path).exists():
-            self.state.jd_text = Path(self.state.jd_path).read_text(encoding="utf-8")
-            if not self.state.business_context:
-                self.state.business_context = self.jd_parser.parse(self.state.jd_text)
+        try:
+            if self.state.resume_path and Path(self.state.resume_path).exists():
+                self.state.resume_text = Path(self.state.resume_path).read_text(encoding="utf-8")
+        except (IOError, UnicodeDecodeError) as e:
+            self.state.resume_text = f""
+        try:
+            if self.state.jd_path and Path(self.state.jd_path).exists():
+                self.state.jd_text = Path(self.state.jd_path).read_text(encoding="utf-8")
+                if not self.state.business_context:
+                    self.state.business_context = self.jd_parser.parse(self.state.jd_text)
+        except (IOError, UnicodeDecodeError) as e:
+            self.state.jd_text = ""
 
     def _next_state(self) -> _StateMachine:
         if self.state.conflict_flag:
@@ -89,6 +104,12 @@ class Orchestrator:
         # Append candidate response to unified history
         if candidate_response:
             self.state.append_unified({"role": "user", "content": candidate_response})
+
+        # Global turn limit check (applies even during sub-stages)
+        if self.state.turn >= self.state.max_turns:
+            self.state.status = "finished"
+            report = self._generate_report()
+            return StepResult(agent="scribe", question="", finished=True, report=report)
 
         # Check if current agent has sub-stages and is not done
         if self.state.current_agent in ["tech1", "tech2"]:
@@ -154,7 +175,12 @@ class Orchestrator:
             if self.state.get_stage_turns(agent_name) == 0:
                 difficulty = "easy" if agent_name == "tech1" else "medium"
                 problem = agent.generate_coding_problem(memory_distillate, difficulty)
-                self.state.current_coding_task = problem.model_dump()
+                if problem is None:
+                    self.state.current_coding_task = None
+                elif hasattr(problem, "model_dump"):
+                    self.state.current_coding_task = problem.model_dump()
+                else:
+                    self.state.current_coding_task = problem.to_dict()
         elif sub_stage == "reflect":
             context = agent.build_reflect_context(memory_distillate, self.state)
             # Clear coding task
@@ -259,7 +285,7 @@ class Orchestrator:
             distillate=memory_distillate,
             raw_digest=self._digest(candidate_response, output.question),
             budget_consumed=estimated,
-            challenge_flags=[conflict] if conflict else None,
+            challenge_flags=[conflict] if conflict else [],
             agent_question=output.question,
             evaluation_score=output.evaluation_score,
         )
@@ -335,7 +361,7 @@ class Orchestrator:
             distillate=memory_distillate,
             raw_digest=self._digest(candidate_response, output.question),
             budget_consumed=estimated,
-            challenge_flags=[conflict] if conflict else None,
+            challenge_flags=[conflict] if conflict else [],
             agent_question=output.question,
             evaluation_score=output.evaluation_score,
         )
