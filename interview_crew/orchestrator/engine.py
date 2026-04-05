@@ -114,14 +114,30 @@ class Orchestrator:
             if "tech2" in self._enabled_rounds:
                 return "tech2"
 
-        # Check if current round has reached its turn limit
+        # Check if current round has reached its turn limit or sub-stage is done
         if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
-            round_config = self.state.config.get_round_config(self.state.current_agent)
-            current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
-            if current_round_turns >= round_config.max_turns:
-                # Force advance to next round
-                pass  # Will advance below
+            # If sub-stage is "done", always advance to next round (for tech agents)
+            if self.state.current_agent in ["tech1", "tech2"]:
+                if self.state.get_sub_stage(self.state.current_agent) == "done":
+                    pass  # Will advance below
+                else:
+                    # Check turn limit for non-done stages
+                    round_config = self.state.config.get_round_config(self.state.current_agent)
+                    current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
+                    # FIX: If current round still has remaining turns, continue with current agent
+                    if current_round_turns < round_config.max_turns:
+                        return self.state.current_agent
+                    # Otherwise advance to next round (handled below)
+            else:
+                # Non-tech agents: check turn limit only
+                round_config = self.state.config.get_round_config(self.state.current_agent)
+                current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
+                # FIX: If current round still has remaining turns, continue with current agent
+                if current_round_turns < round_config.max_turns:
+                    return self.state.current_agent
+                # Otherwise advance to next round (handled below)
 
+        # Advance to next round
         if self._current_round_index >= len(self._enabled_rounds):
             return "scribe"
 
@@ -159,6 +175,11 @@ class Orchestrator:
                     # Sub-stages complete, advance to next main state
                     pass
 
+        # Track per-round turn count for current agent BEFORE calling _next_agent()
+        # This ensures _next_agent() sees the updated count when deciding whether to advance
+        if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
+            self._round_turn_counts[self.state.current_agent] = self._round_turn_counts.get(self.state.current_agent, 0) + 1
+
         # Determine next agent
         next_agent = self._next_agent()
         if next_agent == "scribe" or self.state.turn >= effective_max_turns:
@@ -167,9 +188,6 @@ class Orchestrator:
             return StepResult(agent="scribe", question="", finished=True, report=report)
 
         self.state.current_agent = next_agent
-
-        # Track per-round turn count
-        self._round_turn_counts[next_agent] = self._round_turn_counts.get(next_agent, 0) + 1
 
         # Check if this is a Tech Agent with sub-stages
         agent = self.agents[next_agent]
