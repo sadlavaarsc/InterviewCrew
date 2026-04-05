@@ -60,16 +60,26 @@ class Orchestrator:
 
         # New: Use config to determine enabled rounds and order
         self._enabled_rounds = self.state.config.get_enabled_rounds()
-        self._current_round_index = self._get_current_round_index()
 
-        # Track per-round turn counts
-        self._round_turn_counts: Dict[str, int] = {}
+        # Load persistent round tracking from state
+        self._round_turn_counts: Dict[str, int] = getattr(
+            self.state, "round_turn_counts", {}
+        )
 
-        # Check if current agent is already done (e.g., sub_stage == "done")
-        # If so, advance to next round
-        if self.state.current_agent in ["tech1", "tech2"]:
-            if self.state.get_sub_stage(self.state.current_agent) == "done":
-                self._current_round_index += 1
+        # Determine _current_round_index: if current agent has already started
+        # (has turn count > 0), index should point to the NEXT agent.
+        has_agent_started = (
+            self.state.current_agent in self._round_turn_counts
+            and self._round_turn_counts[self.state.current_agent] > 0
+        )
+        if has_agent_started and self.state.current_agent in self._enabled_rounds:
+            self._current_round_index = (
+                self._enabled_rounds.index(self.state.current_agent) + 1
+            )
+        else:
+            self._current_round_index = getattr(
+                self.state, "current_round_index", self._get_current_round_index()
+            )
 
         if self.state.status == "finished" or self.state.turn >= self._get_effective_max_turns():
             self._current_round_index = len(self._enabled_rounds)
@@ -114,28 +124,20 @@ class Orchestrator:
             if "tech2" in self._enabled_rounds:
                 return "tech2"
 
-        # Check if current round has reached its turn limit or sub-stage is done
         if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
-            # If sub-stage is "done", always advance to next round (for tech agents)
+            round_config = self.state.config.get_round_config(self.state.current_agent)
+            current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
+
             if self.state.current_agent in ["tech1", "tech2"]:
-                if self.state.get_sub_stage(self.state.current_agent) == "done":
-                    pass  # Will advance below
-                else:
-                    # Check turn limit for non-done stages
-                    round_config = self.state.config.get_round_config(self.state.current_agent)
-                    current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
-                    # FIX: If current round still has remaining turns, continue with current agent
-                    if current_round_turns < round_config.max_turns:
-                        return self.state.current_agent
-                    # Otherwise advance to next round (handled below)
-            else:
-                # Non-tech agents: check turn limit only
-                round_config = self.state.config.get_round_config(self.state.current_agent)
-                current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
-                # FIX: If current round still has remaining turns, continue with current agent
+                # Tech Agent: only advance if sub_stage is done AND turns exhausted
+                if self.state.get_sub_stage(self.state.current_agent) != "done":
+                    return self.state.current_agent
                 if current_round_turns < round_config.max_turns:
                     return self.state.current_agent
-                # Otherwise advance to next round (handled below)
+            else:
+                # Non-tech Agent: advance only when turns exhausted
+                if current_round_turns < round_config.max_turns:
+                    return self.state.current_agent
 
         # Advance to next round
         if self._current_round_index >= len(self._enabled_rounds):
@@ -179,9 +181,14 @@ class Orchestrator:
         # This ensures _next_agent() sees the updated count when deciding whether to advance
         if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
             self._round_turn_counts[self.state.current_agent] = self._round_turn_counts.get(self.state.current_agent, 0) + 1
+            # Persist to state for session recovery
+            self.state.round_turn_counts = self._round_turn_counts
 
         # Determine next agent
         next_agent = self._next_agent()
+        # Persist round index to state for session recovery
+        self.state.current_round_index = self._current_round_index
+
         if next_agent == "scribe" or self.state.turn >= effective_max_turns:
             self.state.status = "finished"
             report = self._generate_report()
@@ -192,7 +199,7 @@ class Orchestrator:
         # Check if this is a Tech Agent with sub-stages
         agent = self.agents[next_agent]
         if agent.has_sub_stages:
-            # Reset sub-stage to beginning
+            # Reset sub-stage to beginning (needed when continuing same agent for next round)
             self.state.reset_agent_stage(next_agent)
             return self._process_tech_agent_sub_stage(next_agent, candidate_response)
 
@@ -430,12 +437,20 @@ class Orchestrator:
         return "\n".join(parts)
 
     def _peek_next_agent(self, current: str) -> str:
-        """Peek next agent based on config-enabled rounds."""
+        """Peek next agent based on config-enabled rounds.
+
+        Considers remaining turns for the current agent.
+        """
         if current == "scribe":
             return "scribe"
 
-        # Find current in enabled rounds
         if current in self._enabled_rounds:
+            round_config = self.state.config.get_round_config(current)
+            current_round_turns = self._round_turn_counts.get(current, 0)
+            # If current agent still has remaining turns, next is itself
+            if current_round_turns < round_config.max_turns:
+                return current
+            # Otherwise advance to next enabled round
             idx = self._enabled_rounds.index(current)
             if idx + 1 < len(self._enabled_rounds):
                 return self._enabled_rounds[idx + 1]

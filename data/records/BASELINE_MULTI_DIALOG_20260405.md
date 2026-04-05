@@ -1,0 +1,171 @@
+# MAS Baseline Test Dialog - 20260405
+
+Session ID: baseline-mas-20260405-155547
+Total turns: 15
+Config: tech1×4 → tech2×4 → sysdes×3 → leader×2 → hr×2 = 15
+
+---
+
+## Turn 1 [tech1]
+
+**Candidate**: 您好，我叫李文韬，上海交通大学 IEEE 试点班自动化专业在读。擅长 Python、C++，主要做 Agent 和 RAG 方向。
+
+**Interviewer**: ```json
+{
+  "question": "你好，文韬。欢迎参加面试。我看你简历中 `RepoMind` 项目提到了 AST 感知多级分块策略，这与我们目前关注的代码理解方向比较相关。能否请你详细介绍一下这个项目？特别是你在实现 AST 解析时，具体使用了哪些 Python 标准库或第三方库，是如何保证代码结构信息不丢失的？",
+  "evaluation_score": 0.0,
+  "k
+
+---
+
+## Turn 2 [tech1]
+
+**Candidate**: 我的 RepoMind 项目是一个代码感知 RAG 系统，使用 AST 多级分块策略，相比朴素 RAG 减少了约 88% 的 token 消耗。
+
+**Interviewer**: ```json
+{
+  "question": "明白了，88% 的 token 节省确实很显著。我想深入了解一下技术实现细节：你在解析 Python 代码生成 AST 时，具体使用的是哪个库？是标准库的 `ast` 模块还是第三方库如 `lib2to3` 或 `tree-sitter`？另外，你是如何通过 AST 节点提取函数签名、导入关系这些元数据的？能否描述一下具体的遍历方式？",
+  "e
+
+---
+
+## Turn 3 [tech1]
+
+**Candidate**: CueZero 是一个高性能台球 AI，使用 PyTorch 和强化学习训练策略网络，实现了实时物理模拟。
+
+**Interviewer**: ```json
+{
+  "question": "好的，我了解了你的项目背景。现在我们来进入编码环节，我想考察一下你的基础算法实现能力。请完成以下题目：",
+  "evaluation_score": 0.5,
+  "key_weaknesses": ["项目介绍过于概括，缺乏技术深度"],
+  "follow_up_candidates": [
+    "MCTS 中探索与利用的平衡公式是什么？
+
+---
+
+## Turn 4 [tech1]
+
+**Candidate**: 我在项目中用 FastAPI 搭建了服务，Pydantic v2 做数据验证，FAISS 做向量检索。
+
+**Interviewer**: ```json
+{
+  "question": "好的，这些技术选型我了解了。不过我们现在已经进入编码考核环节了。请你完成刚才给出的 Two Sum 题目，使用 Python 实现即可。请写出完整的函数代码，我会运行测试用例来验证。",
+  "evaluation_score": 0.5,
+  "key_weaknesses": ["未注意面试阶段转换", "回答与当前环节不匹配"],
+  "fo
+
+---
+
+## Turn 5 [tech1]
+
+**Candidate**: AST 分块的思路是把代码按 file/class/function/block 四级切片，保留结构化元数据比如 import 关系和调用图。
+
+**Interviewer**: ```json
+{
+  "question": "文韬，我理解你想继续介绍项目，但我们现在处于编码考核环节。请你先完成刚才的 Two Sum 算法题，用 Python 写出完整的函数实现。代码写完后我会运行测试用例验证。请提交你的代码。",
+  "evaluation_score": 0.4,
+  "key_weaknesses": ["未注意面试阶段转换", "多次回避编码任务"],
+  "fo
+
+---
+
+## Turn 6 [tech1]
+
+**Candidate**: RAG 检索流水线我设计了 Query 扩展 → 向量检索 → n-gram 关键词过滤 → MMR 多样性重排序。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了 RAG 流水线的四个阶段。我特别关注第二步：向量检索（使用 FAISS）。请问你是如何对代码块进行向量化表示的？具体使用了哪个 LLM 模型生成 embedding？在处理函数级代码块时，是否对输入做了特殊预处理（比如保留关键字、移除注释）？能否举例说明你的 prompt 构造方式？",
+  "evaluation_score": 
+
+---
+
+## Turn 7 [tech1]
+
+**Candidate**: 双模型路由是根据问题复杂度分类，简单问题用 flash 模型快速回答，复杂问题用 plus 模型深度推理。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了双模型路由机制。我理解你是通过问题分类来决定使用 Flash 还是 Plus 模型。那么，请问：你是如何实现这个‘问题复杂度分类’的？具体用了什么方法？是基于关键词匹配、规则模板，还是用了一个小型分类模型？如果用模型，它的输入特征是什么？输出又是如何映射到路由策略的？能否举一个具体的例子说明分类逻辑？",
+  "evaluation_
+
+---
+
+## Turn 8 [tech1]
+
+**Candidate**: MCP 协议让 Claude Desktop 可以直接调用 RepoMind 的工具，实现了代码库的智能问答。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了 MCP 协议支持 Claude Desktop 直接调用 RepoMind 工具。那么，请问：你是如何设计这个工具调用接口的？具体是通过什么方式实现协议对接的？是否遵循了 MCP 协议的规范（如 JSON Schema 定义、方法注册、参数校验）？能否举例说明一个工具的定义格式，比如 'search_code' 方法的输入输出结构？
+
+---
+
+## Turn 9 [tech1]
+
+**Candidate**: 如果 RepoMind 要支撑 10万+ 代码库，我会把 AST 解析和向量索引做成分布式服务，用消息队列解耦。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了分布式架构和消息队列解耦。那么，请具体说明：你打算用哪种消息队列（如 RabbitMQ、Kafka、Redis Stream）？为什么选择它？在解析任务分发时，你是如何保证每个代码库的 AST 处理任务能被正确分配到不同的 worker 节点的？如果某个 worker 失败了，如何确保任务不丢失？请描述一下你的任务调度和容错机制设计。
+
+---
+
+## Turn 10 [tech1]
+
+**Candidate**: 缓存层我考虑用 Redis 缓存热点查询的检索结果，同时用 LRU 策略管理向量索引的内存占用。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了使用 Redis 缓存热点查询结果，并用 LRU 策略管理向量索引内存。那么，请具体说明：你是如何设计缓存键（key）的？是否包含 query 内容、代码库 ID、chunk level 等信息？如果两个不同代码库中存在相同函数名，会不会导致缓存命中错误？另外，当向量索引更新时，你是如何保证缓存失效与数据一致性？有没有引入版本号或时间
+
+---
+
+## Turn 11 [tech1]
+
+**Candidate**: 异步处理方面，大文件解析可以用 Celery 任务队列，避免阻塞主服务。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了使用 Celery 处理大文件解析以避免阻塞主服务。那么，请具体说明：你是如何设计 Celery 任务的？每个任务的输入参数是什么？是否包含文件路径、代码库 ID、分块策略等信息？在任务执行过程中，如果某个解析任务失败了（比如语法错误或内存溢出），你是如何处理的？有没有设置重试机制？最大重试次数是多少？失败后是否会通知前端或记录日志？
+
+---
+
+## Turn 12 [tech1]
+
+**Candidate**: 技术选型上选择 FastAPI 是因为异步性能更好，Pydantic 的类型安全减少了大量运行时错误。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了 FastAPI 的异步性能和 Pydantic 的类型安全。那么，请具体说明：你是如何利用 FastAPI 的异步特性来提升 RAG 系统吞吐量的？例如，在处理一个代码库的多级分块请求时，是否使用了 `async/await` 来并发执行 AST 解析、向量化、存储写入等步骤？如果这些操作中有阻塞调用（如文件读取或 API 请求），
+
+---
+
+## Turn 13 [tech1]
+
+**Candidate**: AST 分块策略的设计灵感来自于编译器的前端分析，我花了两周时间调研了 tree-sitter 等工具。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了调研 tree-sitter 并用于 AST 分块策略。那么，请问：你在实际实现中最终选择了 tree-sitter 还是 Python 标准库的 `ast` 模块？为什么？如果选择 tree-sitter，你是如何在 Python 中集成它的？是否使用了 `tree-sitter-python` 的解析器？在处理复杂语法（如装饰器、
+
+---
+
+## Turn 14 [tech1]
+
+**Candidate**: 选择 Agent 方向是因为我相信 LLM 应用是未来趋势，希望能参与构建下一代智能系统。
+
+**Interviewer**: ```json
+{
+  "question": "很好，你提到了对 Agent 方向的强烈兴趣。那么，请结合你的项目经历，具体谈谈：在 RepoMind 中，你是如何设计 Agent 的决策逻辑来决定使用 Fast 模型还是 Slow 模型的？这个‘智能分类’模块是基于规则、关键词匹配，还是用了一个小型机器学习模型？如果是模型，它的输入特征是什么？输出又是如何映射到路由策略的？能否举一个具体的例子
+
+---
+
+## Turn 15 [scribe]
+
+**Candidate**: 我的优势是工程能力强 + 有算法竞赛背景，能快速把想法落地成可运行的系统。
+
+**Status**: Finished
+
+---
+

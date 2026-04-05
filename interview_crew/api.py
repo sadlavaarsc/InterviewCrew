@@ -234,8 +234,13 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = str(uuid.uuid4())
 
     # Build interview config from request
-    # Use max_turns if total_max_turns not explicitly set (backward compatible)
-    effective_total_turns = req.total_max_turns if req.total_max_turns != 30 else req.max_turns
+    # When rounds_config is provided, total_max_turns defaults to sum of enabled round max_turns
+    if req.rounds_config:
+        effective_total_turns = sum(
+            r.max_turns for r in req.rounds_config.values() if r.enabled
+        )
+    else:
+        effective_total_turns = req.total_max_turns if req.total_max_turns != 30 else req.max_turns
     config = InterviewConfig(total_max_turns=effective_total_turns)
 
     if req.rounds_config:
