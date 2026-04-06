@@ -227,7 +227,7 @@ Below is an actual test run demonstrating the multi-agent collaboration:
 <summary><b>🔹 Stage 5: Scribe (Final Evaluation)</b></summary>
 
 ```markdown
-# 面评报告
+# Final Evaluation Report (面评报告)
 
 ## 技术评估
 候选人在代码感知RAG系统（RepoMind）中展现了深厚的技术积累，特别是在AST解析、
@@ -506,7 +506,7 @@ tests/                      # pytest suite (19 tests)
 - [x] Configurable interview rounds
 - [ ] Persistent session storage (currently in-memory)
 - [ ] Web UI for visual interview management
-- [ ] Baseline evaluation: Single Agent vs Multi-Agent
+- [x] Baseline evaluation: Single Agent vs Multi-Agent
 - [ ] Support for custom agent personas
 
 ---
@@ -516,9 +516,9 @@ tests/                      # pytest suite (19 tests)
 ```bibtex
 @software{interviewcrew2025,
   title={InterviewCrew: Multi-Agent Interview Simulator},
-  author={InterviewCrew Team},
+  author={Wentao Li},
   year={2025},
-  url={https://github.com/yourusername/InterviewCrew}
+  url={https://github.com/sadlavaarsc/InterviewCrew}
 }
 ```
 

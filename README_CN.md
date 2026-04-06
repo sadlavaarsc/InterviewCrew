@@ -234,7 +234,7 @@ curl -X POST http://localhost:8000/sessions \
 <summary><b>🔹 阶段 5：Scribe 最终面评</b></summary>
 
 ```markdown
-# 面评报告
+# Final Evaluation Report (面评报告)
 
 ## 技术评估
 候选人在代码感知 RAG 系统（RepoMind）中展现了深厚的技术积累，特别是在 AST 解析、
@@ -513,7 +513,7 @@ tests/                      # 测试套件（19 项测试）
 - [x] 可配置的面试轮次
 - [ ] 持久化会话存储（当前为内存存储）
 - [ ] Web UI 可视化面试管理
-- [ ] 基线评估：单 Agent vs 多 Agent 对比
+- [x] 基线评估：单 Agent vs 多 Agent 对比
 - [ ] 支持自定义面试官人设
 
 ---
@@ -523,9 +523,9 @@ tests/                      # 测试套件（19 项测试）
 ```bibtex
 @software{interviewcrew2025,
   title={InterviewCrew: Multi-Agent Interview Simulator},
-  author={InterviewCrew Team},
+  author={Wentao Li},
   year={2025},
-  url={https://github.com/yourusername/InterviewCrew}
+  url={https://github.com/sadlavaarsc/InterviewCrew}
 }
 ```
 
