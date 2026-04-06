@@ -17,6 +17,12 @@ from interview_crew.agents import Tech1Agent, Tech2Agent, SysDesAgent, LeaderAge
 from interview_crew.orchestrator.budget_guardian import BudgetGuardian
 from interview_crew.orchestrator.conflict_arbitrator import ConflictArbitrator
 from interview_crew.orchestrator.jd_parser import JDParsingStrategy, LLMJDParser
+from interview_crew.orchestrator.quota import (
+    TurnQuotaManager,
+    QuotaLevel,
+    QuotaAction,
+    QuotaCheckResult,
+)
 
 
 @dataclass
@@ -84,6 +90,9 @@ class Orchestrator:
         if self.state.status == "finished" or self.state.turn >= self._get_effective_max_turns():
             self._current_round_index = len(self._enabled_rounds)
 
+        # Initialize quota manager
+        self._quota = TurnQuotaManager(self.state.config, self.state)
+
         self._maybe_load_files()
 
     def _get_current_round_index(self) -> int:
@@ -114,106 +123,209 @@ class Orchestrator:
             self.state.jd_text = ""
 
     def _next_agent(self) -> str:
-        """Determine next agent based on config-enabled rounds.
+        """
+        简化的 _next_agent
 
-        Returns "scribe" if no more rounds, or the next enabled agent name.
+        Note: 现在限制检查主要在 quota 中处理，这里只做简单的状态判断
         """
         if self.state.conflict_flag:
-            # Arbitration mode: route to tech2 for reconciliation
             self.state.conflict_flag = False
             if "tech2" in self._enabled_rounds:
                 return "tech2"
 
-        if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
-            round_config = self.state.config.get_round_config(self.state.current_agent)
-            current_round_turns = self._round_turn_counts.get(self.state.current_agent, 0)
-
-            if self.state.current_agent in ["tech1", "tech2"]:
-                # Tech Agent: only advance if sub_stage is done AND turns exhausted
-                if self.state.get_sub_stage(self.state.current_agent) != "done":
-                    return self.state.current_agent
-                if current_round_turns < round_config.max_turns:
-                    return self.state.current_agent
-            else:
-                # Non-tech Agent: advance only when turns exhausted
-                if current_round_turns < round_config.max_turns:
-                    return self.state.current_agent
-
-        # Advance to next round
-        if self._current_round_index >= len(self._enabled_rounds):
+        # 如果没有当前 agent（初始状态），返回第一个启用的 agent
+        if not self.state.current_agent:
+            if self._enabled_rounds:
+                return self._enabled_rounds[0]
             return "scribe"
 
-        next_agent = self._enabled_rounds[self._current_round_index]
-        self._current_round_index += 1
-        return next_agent
+        # 如果当前 agent 有 sub-stages 且未完成，继续
+        if self.state.current_agent in ["tech1", "tech2"]:
+            if self.state.get_sub_stage(self.state.current_agent) != "done":
+                return self.state.current_agent
+
+        # 使用配额系统决定下一步
+        remaining = self._quota.get_remaining(self.state.current_agent)
+        if remaining.get("agent", 0) > 0:
+            return self.state.current_agent
+
+        # 配额耗尽，切换到下一个
+        return self._get_next_enabled_agent()
 
     def step(self, candidate_response: str) -> StepResult:
-        self.state.candidate_response = candidate_response
-        self.state.turn += 1
+        """
+        简化的 step 方法 - 统一配额检查入口
 
-        # Append candidate response to unified history
+        核心原则:
+        1. 单一入口: 所有 turn 都经过这里
+        2. 统一配额检查: 不分散在各分支
+        3. 清晰分流: 根据配额结果决定动作
+        """
+        self.state.candidate_response = candidate_response
+
+        # 0. 初始化：如果没有当前 agent，选择第一个启用的 agent
+        if not self.state.current_agent:
+            if self._enabled_rounds:
+                self.state.current_agent = self._enabled_rounds[0]
+                self.state.current_round_index = 1  # 指向下一个 agent
+            else:
+                return self._finish_interview()
+
+        # 1. 确定当前状态
+        current_agent = self.state.current_agent
+        sub_stage = self._get_current_sub_stage(current_agent)
+
+        # 2. 统一配额检查 (核心！)
+        quota_result = self._quota.check_and_consume(current_agent, sub_stage)
+
+        # 3. 记录 turn（在配额消费之后）
+        self.state.turn += 1
         if candidate_response:
             self.state.append_unified({"role": "user", "content": candidate_response})
 
-        # Global turn limit check (applies even during sub-stages)
-        effective_max_turns = self._get_effective_max_turns()
-        if self.state.turn >= effective_max_turns:
-            self.state.status = "finished"
-            report = self._generate_report()
-            return StepResult(agent="scribe", question="", finished=True, report=report)
+        # 4. 根据配额结果执行动作
+        if not quota_result.can_continue:
+            return self._handle_quota_exhausted(quota_result, candidate_response)
 
-        # Check if current agent has sub-stages and is not done
-        if self.state.current_agent in ["tech1", "tech2"]:
-            agent_name = self.state.current_agent
-            agent = self.agents[agent_name]
+        # 额外检查：global quota 是否在本次消费后耗尽 (BUG-001 修复)
+        remaining = self._quota.get_remaining(current_agent)
+        if remaining.get("global", 0) <= 0:
+            return self._finish_interview()
 
-            if agent.has_sub_stages:
-                sub_stage = self.state.get_sub_stage(agent_name)
+        # 额外检查：agent quota 是否在本次消费后耗尽
+        # 这需要在本回合执行完毕后切换到下一个 agent
+        if remaining.get("agent", 0) <= 0 and sub_stage in [None, "done"]:
+            # 非 Tech Agent 或 Tech Agent 完成所有 sub-stages，立即切换
+            return self._handle_quota_exhausted(
+                QuotaCheckResult(
+                    can_continue=False,
+                    exhausted_level=QuotaLevel.AGENT,
+                    action=QuotaAction.SWITCH_AGENT,
+                    reason=f"Agent {current_agent} quota exhausted after this turn"
+                ),
+                candidate_response
+            )
 
-                if sub_stage != "done":
-                    # Process sub-stage
-                    return self._process_tech_agent_sub_stage(agent_name, candidate_response)
-                else:
-                    # Sub-stages complete, advance to next main state
-                    pass
-
-        # Track per-round turn count for current agent BEFORE calling _next_agent()
-        # This ensures _next_agent() sees the updated count when deciding whether to advance
-        if self.state.current_agent and self.state.current_agent in self._enabled_rounds:
-            self._round_turn_counts[self.state.current_agent] = self._round_turn_counts.get(self.state.current_agent, 0) + 1
-            # Persist to state for session recovery
+        # 5. 更新 per-round 计数（向后兼容）
+        if current_agent and current_agent in self._enabled_rounds:
+            self._round_turn_counts[current_agent] = self._round_turn_counts.get(current_agent, 0) + 1
             self.state.round_turn_counts = self._round_turn_counts
 
-        # Determine next agent
-        next_agent = self._next_agent()
-        # Persist round index to state for session recovery
-        self.state.current_round_index = self._current_round_index
+        # 6. 执行正常 turn
+        return self._execute_turn(current_agent, sub_stage, candidate_response)
 
-        if next_agent == "scribe" or self.state.turn >= effective_max_turns:
+    def _get_current_sub_stage(self, agent: str) -> Optional[str]:
+        """获取当前 sub-stage（如果有）"""
+        if agent not in ["tech1", "tech2"]:
+            return None
+        return self.state.get_sub_stage(agent)
+
+    def _handle_quota_exhausted(
+        self,
+        result: QuotaCheckResult,
+        candidate_response: str
+    ) -> StepResult:
+        """统一处理配额耗尽情况"""
+        if result.action == QuotaAction.FINISH:
             self.state.status = "finished"
             report = self._generate_report()
             return StepResult(agent="scribe", question="", finished=True, report=report)
 
-        self.state.current_agent = next_agent
+        elif result.action == QuotaAction.SWITCH_AGENT:
+            # Agent 配额耗尽，切换到下一个
+            # 计算下一个 agent 的索引
+            if self.state.current_agent in self._enabled_rounds:
+                current_idx = self._enabled_rounds.index(self.state.current_agent)
+                self._current_round_index = current_idx + 1
+            else:
+                # 当前 agent 不在列表中，使用当前的 _current_round_index
+                pass
+            next_agent = self._get_next_enabled_agent()
+            if next_agent == "scribe":
+                self.state.status = "finished"
+                report = self._generate_report()
+                return StepResult(agent="scribe", question="", finished=True, report=report)
 
-        # Check if this is a Tech Agent with sub-stages
-        agent = self.agents[next_agent]
-        if agent.has_sub_stages:
-            # Reset sub-stage to beginning (needed when continuing same agent for next round)
-            self.state.reset_agent_stage(next_agent)
-            return self._process_tech_agent_sub_stage(next_agent, candidate_response)
+            self.state.current_agent = next_agent
+            # 重置 sub-stage
+            if next_agent in ["tech1", "tech2"]:
+                self.state.reset_agent_stage(next_agent)
+            return self._execute_turn(next_agent, self._get_current_sub_stage(next_agent), candidate_response)
 
-        return self._process_standard_agent(next_agent, candidate_response)
+        elif result.action == QuotaAction.ADVANCE_STAGE:
+            # Sub-stage 配额耗尽，推进到下一个
+            agent = self.state.current_agent
+            self.state.advance_sub_stage(agent)
+
+            # 推进后如果是 done，进入正常切换逻辑
+            if self.state.get_sub_stage(agent) == "done":
+                return self._handle_agent_round_complete(agent, candidate_response)
+
+            # 否则继续执行新的 sub-stage
+            new_stage = self._get_current_sub_stage(agent)
+            return self._execute_turn(agent, new_stage, candidate_response)
+
+        else:
+            raise RuntimeError(f"Unknown quota action: {result.action}")
+
+    def _handle_agent_round_complete(self, agent: str, candidate_response: str) -> StepResult:
+        """处理 agent 完成一轮（sub_stage == done）"""
+        # 检查是否还有配额继续该 agent 的下一轮
+        remaining = self._quota.get_remaining(agent)
+        if remaining.get("agent", 0) > 0:
+            # 继续该 agent 的下一轮
+            self.state.reset_agent_stage(agent)
+            new_stage = self._get_current_sub_stage(agent)
+            return self._execute_turn(agent, new_stage, candidate_response)
+        else:
+            # 切换到下一个 agent
+            return self._handle_quota_exhausted(
+                QuotaCheckResult(
+                    can_continue=False,
+                    exhausted_level=QuotaLevel.AGENT,
+                    action=QuotaAction.SWITCH_AGENT,
+                    reason=f"Agent {agent} completed round but quota exhausted"
+                ),
+                candidate_response
+            )
+
+    def _execute_turn(
+        self,
+        agent: str,
+        sub_stage: Optional[str],
+        candidate_response: str
+    ) -> StepResult:
+        """执行实际的 turn（无限制检查，只执行业务逻辑）"""
+        if agent in ["tech1", "tech2"]:
+            if sub_stage == "done":
+                # Sub-stages 完成，处理 round 完成逻辑
+                return self._handle_agent_round_complete(agent, candidate_response)
+            elif sub_stage:
+                return self._process_tech_agent_sub_stage(agent, candidate_response)
+            else:
+                return self._process_standard_agent(agent, candidate_response)
+        elif agent == "scribe":
+            return self._finish_interview()
+        else:
+            return self._process_standard_agent(agent, candidate_response)
+
+    def _get_next_enabled_agent(self) -> str:
+        """获取下一个启用的 agent"""
+        if self._current_round_index >= len(self._enabled_rounds):
+            return "scribe"
+        return self._enabled_rounds[self._current_round_index]
+
+    def _finish_interview(self) -> StepResult:
+        """结束面试"""
+        self.state.status = "finished"
+        report = self._generate_report()
+        return StepResult(agent="scribe", question="", finished=True, report=report)
 
     def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
-        """Process Tech Agent with sub-stages (chat -> coding -> reflect)."""
-        # Check global turn limit first (fixes BUG-001)
-        effective_max_turns = self._get_effective_max_turns()
-        if self.state.turn >= effective_max_turns:
-            self.state.status = "finished"
-            report = self._generate_report()
-            return StepResult(agent="scribe", question="", finished=True, report=report)
+        """Process Tech Agent with sub-stages (chat -> coding -> reflect).
 
+        Note: 限制检查统一在 step() 中处理，这里只执行业务逻辑
+        """
         agent = self.agents[agent_name]
         sub_stage = self.state.get_sub_stage(agent_name)
 
@@ -320,14 +432,19 @@ class Orchestrator:
         # Update sub-stage turn counter
         self.state.increment_stage_turns(agent_name)
 
-        # Check if should advance sub-stage (use config limits)
+        # Check if should advance sub-stage based on config limits
         round_config = self.state.config.get_round_config(agent_name)
-        if sub_stage == "chat" and self.state.get_stage_turns(agent_name) >= round_config.max_chat_turns:
+        stage_turns = self.state.get_stage_turns(agent_name)
+
+        if sub_stage == "chat" and stage_turns >= round_config.max_chat_turns:
             self.state.advance_sub_stage(agent_name)
         elif sub_stage == "coding":
             # coding stage waits for manual code submission via API
-            pass
-        elif sub_stage == "reflect" and self.state.get_stage_turns(agent_name) >= round_config.max_reflect_turns:
+            # Also check max_coding_turns to prevent infinite wait
+            max_coding = getattr(round_config, 'max_coding_turns', 5)
+            if stage_turns >= max_coding:
+                self.state.advance_sub_stage(agent_name)
+        elif sub_stage == "reflect" and stage_turns >= round_config.max_reflect_turns:
             self.state.advance_sub_stage(agent_name)
 
         # Build TransferPackage
@@ -452,10 +569,10 @@ class Orchestrator:
             return "scribe"
 
         if current in self._enabled_rounds:
-            round_config = self.state.config.get_round_config(current)
-            current_round_turns = self._round_turn_counts.get(current, 0)
+            # Use quota system to check remaining turns
+            remaining = self._quota.get_remaining(current)
             # If current agent still has remaining turns, next is itself
-            if current_round_turns < round_config.max_turns:
+            if remaining.get("agent", 0) > 0:
                 return current
             # Otherwise advance to next enabled round
             idx = self._enabled_rounds.index(current)

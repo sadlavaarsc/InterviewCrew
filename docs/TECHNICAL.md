@@ -22,6 +22,7 @@
 | 成本控制 | `BudgetGuardian` 按轮次估算 token，超支时自动降级模型 |
 | 评估一致性 | `ConflictArbitrator` 检测跨 Agent 对同一维度的评分方差，触发重新评估 |
 | 协议化交接 | `TransferPackage` 封装每轮产出，形成可持久化的面试记录链 |
+| 配额控制 | `TurnQuotaManager` 统一管理系统配额（global/agent/stage 三级），根治反复出现的 turn 限制 bug |
 
 ---
 
@@ -110,6 +111,8 @@ class TransferPackage(BaseModel):
 | `conflict_flag` | 若 `ConflictArbitrator` 发现方差>0.4，则设为 True，下一轮强制路由到 `tech2` 重新评估 |
 | `resume_text` / `jd_text` | 外部挂载的候选人简历与职位描述（Markdown 原文件） |
 | `business_context` | 由 `JDParsingStrategy` 解析后的结构化 JD 信息 |
+| `quota_consumed_agent` | 配额系统：记录每个 agent 已消费的配额 |
+| `quota_consumed_stage` | 配额系统：记录每个 agent 的 sub-stage 消耗详情 |
 
 ---
 
@@ -120,16 +123,19 @@ class TransferPackage(BaseModel):
 
 #### `step(candidate_response: str) -> StepResult`
 这是 CLI 每轮循环唯一需要调用的方法，内部执行：
-1. **接收回答**：追加到 `unified_history`。
-2. **状态机推进**：`_next_state()` 按 `[screening, tech1, tech2, system, hr, finished]` 顺序推进。若 `conflict_flag=True`，则插入仲裁分支，路由到 `tech2`。
-3. **映射 Agent**：`_state_to_agent` 字典将状态名映射为具体的 Agent 实例（如 `tech2` → `SysDesAgent`）。
-4. **记忆蒸馏**：调用 `distill_memory()` 生成 `MemoryDistillate`。
-5. **预算检查**：`BudgetGuardian.check_and_downgrade()` 根据 token 估算返回实际使用的模型别名（可能降级为 `qwen-flash`）。
-6. **Agent 调用**：通过 LCEL Chain 输出 `AgentOutput`。
-7. **历史更新**：分别更新 `agent_histories[agent_name]` 与 `unified_history`。
-8. **能力记录与冲突检测**：将本轮 `competency_vector` 扁平化存入 `competency_history`，并运行 `ConflictArbitrator.detect_conflict()`。
-9. **构建 TransferPackage**：压入 `transfer_queue`。
-10. **返回结果**：`StepResult(agent, question, finished)`。
+1. **初始化检查**：若 `current_agent` 为空，选择第一个启用的 agent。
+2. **统一配额检查**：`_quota.check_and_consume()` 检查 global/agent/stage 三级配额（核心改进）。
+3. **配额耗尽处理**：若配额耗尽，根据耗尽层级执行相应动作（FINISH/SWITCH_AGENT/ADVANCE_STAGE）。
+4. **记录 turn**：更新 `turn` 计数器，追加回答到 `unified_history`。
+5. **状态机推进**：`_next_agent()` 根据配额系统决定下一步（若 `conflict_flag=True`，则路由到 `tech2`）。
+6. **映射 Agent**：将 agent 名映射为具体的 Agent 实例。
+7. **记忆蒸馏**：调用 `distill_memory()` 生成 `MemoryDistillate`。
+8. **预算检查**：`BudgetGuardian.check_and_downgrade()` 根据 token 估算返回实际使用的模型别名（可能降级为 `qwen-flash`）。
+9. **Agent 调用**：通过 LCEL Chain 输出 `AgentOutput`。
+10. **历史更新**：分别更新 `agent_histories[agent_name]` 与 `unified_history`。
+11. **能力记录与冲突检测**：将本轮 `competency_vector` 扁平化存入 `competency_history`，并运行 `ConflictArbitrator.detect_conflict()`。
+12. **构建 TransferPackage**：压入 `transfer_queue`。
+13. **返回结果**：`StepResult(agent, question, finished)`。
 
 #### 终态处理
 当状态机到达 `finished` 或 `turn >= max_turns` 时，调用 `_generate_report()`：
@@ -182,6 +188,32 @@ self._chain = RunnableSequence(
 - `consume(tokens)`：累计总消耗，写入 `InterviewState.total_budget_consumed`。
 
 **注意**：token 估算是本地启发式 `sum(len(content)) // 4`，不精确但零成本，适合用来做预算门控。
+
+#### TurnQuotaManager (`interview_crew/orchestrator/quota.py`)
+统一的三级配额管理系统，根治 turn 限制相关的反复 bug。
+
+```python
+class TurnQuotaManager:
+    def check(agent, sub_stage) -> QuotaCheckResult    # 检查配额（不消费）
+    def consume(agent, sub_stage) -> QuotaCheckResult  # 消费配额
+    def get_remaining(agent, sub_stage) -> Dict[str, int]  # 获取剩余配额
+```
+
+**配额层级**：
+| 层级 | 配置项 | 默认值 | 耗尽动作 |
+|------|--------|--------|----------|
+| Global | `total_max_turns` | 30 | FINISH (结束面试) |
+| Agent | `max_turns` | 6 | SWITCH_AGENT |
+| Sub-Stage | `stage_turn_limits` | - | ADVANCE_STAGE |
+
+**配额检查顺序**：
+1. 先检查所有层级是否还有配额
+2. 从低到高消费（stage → agent → global）
+3. 任一层级耗尽触发相应动作
+
+**向后兼容**：
+- 支持从旧格式 `round_turn_counts` 恢复配额
+- 保留 `max_chat_turns`/`max_coding_turns`/`max_reflect_turns` 作为快捷配置
 
 #### ConflictArbitrator (`interview_crew/orchestrator/conflict_arbitrator.py`)
 `detect_conflict(evaluations) -> Optional[str]`
@@ -314,7 +346,8 @@ conda activate agentEnv && pytest tests/ -v
 - `test_budget_guardian.py`：预算超限降级、预算内使用 plus、token 累计。
 - `test_conflict_arbitrator.py`：高方差触发冲突、低方差不触发、单条记录忽略。
 - `test_distiller.py`：Mock LLM 验证 `MemoryDistillate` 字段解析。
-- `test_orchestrator.py`：状态机流转、transfer_queue 增长、冲突标记设置。
+- `test_orchestrator.py`：状态机流转、transfer_queue 增长、冲突标记设置、配额耗尽处理。
+- `test_quota.py`：配额初始化、检查、消费、持久化、向后兼容恢复、边界条件。
 - `test_tools_registry.py`：Agent 权限矩阵、最大调用次数限制、模型降级逻辑。
 - `test_api.py`：FastAPI 路由测试（创建会话、单步推进、终态结束、404 处理、健康检查）。
 
@@ -496,7 +529,8 @@ Single Agent Baseline 采用成本优化的模型选择策略：
 2. **工具依赖 LLM 而非真实外部能力**：当前工具通过 LLM 模拟实现（如代码分析、搜索、RAG），尚未对接真实外部系统（代码执行器、搜索引擎、向量数据库）。如需生产级精度，可将 `tool_registry.register()` 替换为真实实现。
 3. **Agent 链无内置 Retry**：LLM 输出 JSON 解析失败时仅做 soft fallback，未做结构性 retry。
 4. **Memory 仅内存持久化**：`InterviewState` 当前在内存中，重启即丢失。如需会话恢复，需将 `transfer_queue` 与 `agent_histories` 序列化到磁盘/数据库。
-5. **状态机为线性管道**：当前状态转移是固定的顺序队列。后续若需动态调度（如根据回答质量跳回某 Agent），需扩展 `_next_state()` 为条件图或评分门控。
+5. **状态机为线性管道**：当前状态转移是固定的顺序队列。后续若需动态调度（如根据回答质量跳回某 Agent），需扩展 `_next_agent()` 为条件图或评分门控。
+6. **配额预估恢复**：从旧会话恢复时，`round_turn_counts` 到 `quota_consumed_agent` 的转换采用直接映射，可能与实际消耗有偏差。
 
 ---
 
@@ -532,6 +566,7 @@ interview_crew/
 │   └── scribe.py
 ├── orchestrator/
 │   ├── engine.py           # Orchestrator + State Machine
+│   ├── quota.py            # TurnQuotaManager 三级配额系统
 │   ├── budget_guardian.py
 │   ├── conflict_arbitrator.py
 │   └── jd_parser.py        # JDParsingStrategy
@@ -554,5 +589,89 @@ tests/
 ├── test_conflict_arbitrator.py
 ├── test_distiller.py
 ├── test_orchestrator.py
+├── test_quota.py           # TurnQuotaManager 单元测试
 └── test_tools_registry.py
 ```
+
+---
+
+## 10. 配额系统配置指南
+
+### 10.1 基础配置
+
+使用 `InterviewConfig` 可以精确控制面试流程的配额分配：
+
+```python
+from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig
+
+# 基础配置
+config = InterviewConfig(
+    total_max_turns=30,  # 全局总轮数限制
+    rounds={
+        "tech1": InterviewRoundConfig(max_turns=6),
+        "tech2": InterviewRoundConfig(max_turns=6),
+        "sysdes": InterviewRoundConfig(max_turns=4),
+        "leader": InterviewRoundConfig(max_turns=3),
+        "hr": InterviewRoundConfig(max_turns=3),
+    }
+)
+```
+
+### 10.2 详细 Sub-stage 配置
+
+使用 `stage_turn_limits` 可以灵活定义任意数量的 sub-stages：
+
+```python
+from interview_crew.protocol.schemas import StageTurnLimit
+
+config = InterviewConfig(
+    rounds={
+        "tech1": InterviewRoundConfig(
+            max_turns=12,  # tech1 总轮数（跨所有 sub-stages）
+            stage_turn_limits=[
+                StageTurnLimit(stage_name="chat", max_turns=2,
+                              description="技术交流阶段"),
+                StageTurnLimit(stage_name="deep_dive", max_turns=3,
+                              description="深入追问阶段"),
+                StageTurnLimit(stage_name="coding", max_turns=5,
+                              description="编程考核阶段"),
+                StageTurnLimit(stage_name="reflect", max_turns=1,
+                              description="反思总结阶段"),
+            ]
+        )
+    }
+)
+```
+
+### 10.3 向后兼容配置
+
+保留旧版配置方式，自动转换为新格式：
+
+```python
+# 旧版配置仍然有效
+config = InterviewConfig(
+    rounds={
+        "tech1": InterviewRoundConfig(
+            max_turns=6,
+            max_chat_turns=2,      # 自动映射到 chat stage
+            max_coding_turns=5,    # 自动映射到 coding stage
+            max_reflect_turns=1,   # 自动映射到 reflect stage
+        )
+    }
+)
+```
+
+### 10.4 配额层级说明
+
+| 层级 | 作用域 | 配置参数 | 说明 |
+|------|--------|----------|------|
+| Global | 整个面试 | `total_max_turns` | 所有 agent 的回合总和上限 |
+| Agent | 单个 agent | `max_turns` | 该 agent 跨所有 sub-stages 的总回合数 |
+| Stage | sub-stage | `stage_turn_limits` | 特定 sub-stage 的回合限制 |
+
+**消费顺序**：stage → agent → global（细粒度优先）
+
+**耗尽动作**：
+- Global 耗尽 → 面试结束（FINISH）
+- Agent 耗尽 → 切换到下一个 agent（SWITCH_AGENT）
+- Stage 耗尽 → 推进到下一个 sub-stage（ADVANCE_STAGE）

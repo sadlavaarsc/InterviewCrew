@@ -4,6 +4,23 @@ from typing import Literal, List, Optional, Dict, Any
 
 # ==================== Interview Configuration ====================
 
+class StageTurnLimit(BaseModel):
+    """单个 sub-stage 的回合限制配置
+
+    支持灵活定义任意 sub-stage 的回合限制，例如:
+        - chat: 技术交流阶段
+        - deep_dive: 深入追问阶段
+        - coding: 编程考核阶段
+        - reflect: 反思总结阶段
+
+    Example:
+        StageTurnLimit(stage_name="deep_dive", max_turns=3, description="深入追问")
+    """
+    stage_name: str = Field(..., description="Sub-stage 名称")
+    max_turns: int = Field(default=2, ge=1, le=50, description="该 sub-stage 的最大回合数")
+    description: str = Field(default="", description="可选描述")
+
+
 class InterviewRoundConfig(BaseModel):
     """Configuration for a single interview round (Agent).
 
@@ -11,18 +28,73 @@ class InterviewRoundConfig(BaseModel):
 
     Example:
         {
-            "tech1": {"enabled": True, "max_turns": 4},
-            "tech2": {"enabled": True, "max_turns": 4},
+            "tech1": {"enabled": True, "max_turns": 6},
+            "tech2": {"enabled": True, "max_turns": 6},
             "sysdes": {"enabled": False},  # Skip this round
             "leader": {"enabled": True, "max_turns": 2},
             "hr": {"enabled": True, "max_turns": 2}
         }
+
+    Example with custom sub-stages:
+        {
+            "tech1": {
+                "enabled": True,
+                "max_turns": 10,
+                "stage_turn_limits": [
+                    {"stage_name": "chat", "max_turns": 2},
+                    {"stage_name": "deep_dive", "max_turns": 3},
+                    {"stage_name": "coding", "max_turns": 5},
+                    {"stage_name": "reflect", "max_turns": 1}
+                ]
+            }
+        }
     """
     enabled: bool = Field(default=True, description="Whether this round is enabled")
-    max_turns: int = Field(default=4, ge=1, le=20, description="Max turns for this agent (excluding sub-stages)")
-    # Sub-stage specific limits
-    max_chat_turns: int = Field(default=2, ge=1, le=10, description="Max turns in chat sub-stage")
-    max_reflect_turns: int = Field(default=1, ge=1, le=5, description="Max turns in reflect sub-stage")
+    max_turns: int = Field(
+        default=6,
+        ge=1,
+        le=30,
+        description="该 agent 的总 turns（跨所有 sub-stages）"
+    )
+
+    # Sub-stage specific limits (new flexible configuration)
+    stage_turn_limits: List[StageTurnLimit] = Field(
+        default_factory=lambda: [
+            StageTurnLimit(stage_name="chat", max_turns=2, description="技术交流阶段"),
+            StageTurnLimit(stage_name="coding", max_turns=5, description="编程考核阶段"),
+            StageTurnLimit(stage_name="reflect", max_turns=1, description="反思总结阶段"),
+        ],
+        description="详细的 sub-stage 回合限制配置"
+    )
+
+    # Legacy sub-stage limits (backward compatible)
+    max_chat_turns: int = Field(default=2, ge=1, le=10, description="Max turns in chat sub-stage (legacy)")
+    max_coding_turns: int = Field(default=5, ge=1, le=20, description="Max turns in coding sub-stage (legacy)")
+    max_reflect_turns: int = Field(default=1, ge=1, le=5, description="Max turns in reflect sub-stage (legacy)")
+
+    def get_stage_limit(self, stage_name: str) -> int:
+        """获取指定 sub-stage 的回合限制
+
+        优先从 stage_turn_limits 查找，回退到旧字段
+
+        Args:
+            stage_name: sub-stage 名称
+
+        Returns:
+            int: 该 sub-stage 的最大回合数
+        """
+        # 优先从 stage_turn_limits 查找
+        for limit in self.stage_turn_limits:
+            if limit.stage_name == stage_name:
+                return limit.max_turns
+
+        # 回退到旧字段
+        fallback_map = {
+            "chat": self.max_chat_turns,
+            "coding": self.max_coding_turns,
+            "reflect": self.max_reflect_turns,
+        }
+        return fallback_map.get(stage_name, 2)
 
 
 class InterviewConfig(BaseModel):
@@ -60,11 +132,11 @@ class InterviewConfig(BaseModel):
     # Per-round configuration
     rounds: Dict[str, InterviewRoundConfig] = Field(
         default_factory=lambda: {
-            "tech1": InterviewRoundConfig(max_turns=4, max_chat_turns=2, max_reflect_turns=1),
-            "tech2": InterviewRoundConfig(max_turns=4, max_chat_turns=2, max_reflect_turns=1),
-            "sysdes": InterviewRoundConfig(max_turns=3, max_chat_turns=2, max_reflect_turns=1),
-            "leader": InterviewRoundConfig(max_turns=2, max_chat_turns=1, max_reflect_turns=1),
-            "hr": InterviewRoundConfig(max_turns=2, max_chat_turns=1, max_reflect_turns=1)
+            "tech1": InterviewRoundConfig(max_turns=6),
+            "tech2": InterviewRoundConfig(max_turns=6),
+            "sysdes": InterviewRoundConfig(max_turns=4),
+            "leader": InterviewRoundConfig(max_turns=3),
+            "hr": InterviewRoundConfig(max_turns=3)
         }
     )
 

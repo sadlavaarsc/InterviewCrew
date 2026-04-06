@@ -49,6 +49,13 @@ class InterviewState:
     round_turn_counts: Dict[str, int] = field(default_factory=dict)
     current_round_index: int = 0
 
+    # Quota tracking for turn limit management (new)
+    quota_consumed_agent: Dict[str, int] = field(default_factory=dict)
+    """记录每个 agent 已消费的配额: {"tech1": 5, "tech2": 3, ...}"""
+
+    quota_consumed_stage: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """记录每个 agent 的 sub-stage 消耗: {"tech1": {"chat": 2, "coding": 3}, ...}"""
+
     # Sub-stage management for Tech Agents
     tech1_sub_stage: str = "chat"  # chat -> coding -> reflect -> done
     tech2_sub_stage: str = "chat"
