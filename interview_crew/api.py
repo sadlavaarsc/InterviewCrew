@@ -8,7 +8,7 @@ from interview_crew.state import InterviewState
 from interview_crew.orchestrator.engine import Orchestrator, StepResult
 from interview_crew.baseline.single_agent_orchestrator import SingleAgentOrchestrator
 from interview_crew.services.code_sandbox import code_sandbox
-from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig
+from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig, StageTurnLimit
 
 # Type alias for orchestrator
 OrchestratorType = Union[Orchestrator, SingleAgentOrchestrator]
@@ -19,12 +19,26 @@ app = FastAPI(title="InterviewCrew API", version="0.1.0")
 _sessions: Dict[str, OrchestratorType] = {}
 
 
+class StageLimitInput(BaseModel):
+    """Input for sub-stage turn limit configuration."""
+    stage_name: str = Field(..., description="Sub-stage name (e.g., 'chat', 'deep_dive', 'coding')")
+    max_turns: int = Field(default=2, ge=1, le=50, description="Max turns for this sub-stage")
+    description: str = Field(default="", description="Optional description")
+
+
 class RoundConfigInput(BaseModel):
     """Input for per-round configuration."""
     enabled: bool = True
-    max_turns: int = Field(default=4, ge=1, le=20)
+    max_turns: int = Field(default=6, ge=1, le=30, description="Total turns for this agent across all sub-stages")
+    # Legacy sub-stage limits (backward compatible)
     max_chat_turns: int = Field(default=2, ge=1, le=10)
+    max_coding_turns: int = Field(default=5, ge=1, le=20, description="Max turns in coding sub-stage")
     max_reflect_turns: int = Field(default=1, ge=1, le=5)
+    # New: detailed sub-stage configuration
+    stage_turn_limits: Optional[List[StageLimitInput]] = Field(
+        default=None,
+        description="Detailed sub-stage turn limits (overrides legacy fields if provided)"
+    )
 
 
 class CreateSessionRequest(BaseModel):
@@ -41,8 +55,8 @@ class CreateSessionRequest(BaseModel):
         {
             "total_max_turns": 10,
             "rounds_config": {
-                "tech1": {"enabled": true, "max_turns": 4},
-                "tech2": {"enabled": true, "max_turns": 4},
+                "tech1": {"enabled": true, "max_turns": 6},
+                "tech2": {"enabled": true, "max_turns": 6},
                 "sysdes": {"enabled": false},
                 "leader": {"enabled": false},
                 "hr": {"enabled": false}
@@ -62,6 +76,23 @@ class CreateSessionRequest(BaseModel):
             "rounds_config": {
                 "tech1": {"enabled": true, "max_turns": 3, "max_chat_turns": 1},
                 "hr": {"enabled": true, "max_turns": 2}
+            }
+        }
+
+        # Detailed sub-stage configuration (new)
+        {
+            "total_max_turns": 20,
+            "rounds_config": {
+                "tech1": {
+                    "enabled": true,
+                    "max_turns": 10,
+                    "stage_turn_limits": [
+                        {"stage_name": "chat", "max_turns": 2, "description": "技术交流"},
+                        {"stage_name": "deep_dive", "max_turns": 3, "description": "深入追问"},
+                        {"stage_name": "coding", "max_turns": 5, "description": "编程考核"},
+                        {"stage_name": "reflect", "max_turns": 1, "description": "反思总结"}
+                    ]
+                }
             }
         }
     """
@@ -245,21 +276,32 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
 
     if req.rounds_config:
         for round_name, round_input in req.rounds_config.items():
+            # Build stage_turn_limits if provided
+            stage_limits = None
+            if round_input.stage_turn_limits:
+                stage_limits = [
+                    StageTurnLimit(
+                        stage_name=s.stage_name,
+                        max_turns=s.max_turns,
+                        description=s.description
+                    )
+                    for s in round_input.stage_turn_limits
+                ]
+
+            round_config = InterviewRoundConfig(
+                enabled=round_input.enabled,
+                max_turns=round_input.max_turns,
+                max_chat_turns=round_input.max_chat_turns,
+                max_coding_turns=round_input.max_coding_turns,
+                max_reflect_turns=round_input.max_reflect_turns,
+                stage_turn_limits=stage_limits if stage_limits else None
+            )
+
             if round_name in config.rounds:
-                config.rounds[round_name] = InterviewRoundConfig(
-                    enabled=round_input.enabled,
-                    max_turns=round_input.max_turns,
-                    max_chat_turns=round_input.max_chat_turns,
-                    max_reflect_turns=round_input.max_reflect_turns
-                )
+                config.rounds[round_name] = round_config
             else:
                 # Add new custom round config
-                config.rounds[round_name] = InterviewRoundConfig(
-                    enabled=round_input.enabled,
-                    max_turns=round_input.max_turns,
-                    max_chat_turns=round_input.max_chat_turns,
-                    max_reflect_turns=round_input.max_reflect_turns
-                )
+                config.rounds[round_name] = round_config
 
     state = InterviewState(
         session_id=session_id,
