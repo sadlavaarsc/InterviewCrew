@@ -319,14 +319,16 @@ CLI 逻辑在 `interview_crew/cli.py` 中：
 4. 打印最终 `report`。
 
 ### 5.4 纯 API 调用示例
+
+#### 基础示例（向后兼容）
 ```bash
-# 1. 创建会话
+# 1. 创建会话（老接口，仍然有效）
 curl -X POST http://127.0.0.1:8000/sessions \
   -H "Content-Type: application/json" \
   -d '{"max_turns":4,"candidate_response":"岗位：后端。简历：3年Python。"}'
 # 返回 {"session_id":"...","status":"ongoing"}
 
-# 2. 推进一轮
+# 2. 推进一轮（接口不变）
 curl -X POST http://127.0.0.1:8000/sessions/<session_id>/step \
   -H "Content-Type: application/json" \
   -d '{"candidate_response":"熟悉 Django 和 FastAPI。"}'
@@ -336,7 +338,96 @@ curl -X POST http://127.0.0.1:8000/sessions/<session_id>/step \
 curl http://127.0.0.1:8000/sessions/<session_id>
 ```
 
-### 5.5 测试运行
+### 5.5 API 兼容性说明
+
+#### 新老接口共存机制
+
+配额系统重构后，API 保持**完全向后兼容**。新老接口的共存机制如下：
+
+| 配置方式 | 优先级 | 说明 |
+|----------|--------|------|
+| `stage_turn_limits` (新) | 最高 | 如果提供，完全覆盖其他配置 |
+| `max_chat_turns`/`max_coding_turns`/`max_reflect_turns` (旧) | 中等 | 自动映射到对应 sub-stage |
+| `max_turns` (Agent 总限制) | 基础 | 跨所有 sub-stages 的累计限制 |
+
+#### 老接口的行为
+
+**场景 1：只使用老接口字段**
+```json
+{
+    "total_max_turns": 30,
+    "rounds_config": {
+        "tech1": {
+            "enabled": true,
+            "max_turns": 6,
+            "max_chat_turns": 2,
+            "max_coding_turns": 5,
+            "max_reflect_turns": 1
+        }
+    }
+}
+```
+**行为**：系统内部自动创建对应的 `stage_turn_limits`，效果与之前完全一致。
+
+**场景 2：混合使用新旧字段**
+```json
+{
+    "rounds_config": {
+        "tech1": {
+            "enabled": true,
+            "max_turns": 6,
+            "max_chat_turns": 2,  // 旧字段
+            "stage_turn_limits": [  // 新字段（优先）
+                {"stage_name": "deep_dive", "max_turns": 3}
+            ]
+        }
+    }
+}
+```
+**行为**：`stage_turn_limits` 中未定义的 stage（如 chat）使用旧字段值，已定义的 stage 使用新配置。
+
+#### 可能的非预期行为
+
+1. **max_turns 语义变化**
+   - **旧语义**：`max_turns` 表示"完整 rounds"数（chat→coding→reflect→done 算 1 round）
+   - **新语义**：`max_turns` 表示该 agent 的**总 turns**（跨所有 sub-stages）
+   - **影响**：如果之前依赖 `max_turns=4` 执行 4 个完整 rounds（约 12-16 turns），现在只会执行 4 turns
+   - **缓解**：系统尝试向后兼容估算，但建议显式增加 `max_turns` 值或细化配置
+
+2. **coding stage 默认限制**
+   - 新增 `max_coding_turns=5` 防止无限等待
+   - 如果候选人需要更多尝试次数，需显式配置更高值
+
+3. **旧会话恢复**
+   - 从 `round_turn_counts` 恢复到 `quota_consumed_agent` 是估算值
+   - 极端情况下可能分配比预期更多/更少的回合
+
+#### 最佳实践建议
+
+1. **新开发**：使用 `stage_turn_limits` 进行细粒度控制
+```json
+{
+    "stage_turn_limits": [
+        {"stage_name": "chat", "max_turns": 2},
+        {"stage_name": "coding", "max_turns": 10},
+        {"stage_name": "reflect", "max_turns": 1}
+    ]
+}
+```
+
+2. **老系统迁移**：先增加 `max_turns` 值以适应新语义
+```json
+{
+    "max_turns": 12,  // 原为 4，现在需要覆盖 4 rounds × 3 stages
+    "max_chat_turns": 2,
+    "max_coding_turns": 5,
+    "max_reflect_turns": 1
+}
+```
+
+3. **向后兼容测试**：迁移后运行 `test_orchestrator.py` 验证行为
+
+### 5.6 测试运行
 ```bash
 # 运行全部测试（pytest 19/19 通过）
 conda activate agentEnv && pytest tests/ -v
