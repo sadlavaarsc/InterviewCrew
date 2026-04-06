@@ -1,0 +1,98 @@
+[
+  {
+    "turn": 2,
+    "agent": "tech1",
+    "question": "```json\n{\n  \"question\": \"我理解你想补充项目细节。不过现在是面试总结环节，我想听听你对自己今天表现的反思：你觉得在技术深度表达上有哪些可以改进的地方？另外，对于多 Agent 协作系统，你认为最大的工程挑战会是什么？\",\n  \"evaluation_score\": 0.58,\n  \"key_weaknesses\": [\"自我反思意识不足，未主动评价表现\", \"项目介绍与反思",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 3,
+    "agent": "tech2",
+    "question": "AST 切片确实能保留结构，但你声称减少了 88% 的 token。当检索到的 function block 依赖外部导入或父类方法时，如果不补充上下文，LLM 无法理解；如果补充，token 数必然上升。你是如何在切片阶段嵌入上下文引用信息的，还是检索后做了二次补全？这个 88% 的节省率是否包含了必要的上下文补充成本？",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 4,
+    "agent": "tech2",
+    "question": "```json\n{\n  \"question\": \"AST 切片确实能保留结构，但你声称减少了 88% 的 token。当检索到的 function block 依赖外部导入或父类方法时，如果不补充上下文，LLM 无法理解；如果补充，token 数必然上升。你是如何在切片阶段嵌入上下文引用信息的，还是检索后做了二次补全？这个 88% 的节省率是否包含了必要的上下文补充成本？\",\n  \"evaluat",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 5,
+    "agent": "tech2",
+    "question": "```json\n{\n  \"question\": \"你说保留了 import 关系和调用图元数据，那具体是怎么存储的？是在 FAISS 向量里作为 metadata 字段，还是单独建了倒排索引？当检索到一个 function 时，你是怎么利用这些元数据动态组装上下文的？给我讲一下检索时的完整数据流。\",\n  \"evaluation_score\": 0.3,\n  \"key_weaknesses\": [",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 7,
+    "agent": "tech2",
+    "question": "```json\n{\n  \"question\": \"分类器本身也有延迟和 Token 成本。如果分类错误，不仅浪费了分类开销，还可能导致用户体验下降（简单问题慢或复杂问题笨）。如果重来一次，考虑到工程维护的复杂度，你会保留这个双模型路由架构，还是直接用一个中等能力的模型全覆盖？为什么？\",\n  \"evaluation_score\": 0.55,\n  \"key_weaknesses\": [\n    \"",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 8,
+    "agent": "sysdes",
+    "question": "MCP 协议本身倾向于无状态的工具调用，但代码问答往往需要多轮对话的上下文累积（例如引用之前的修改建议）。你在架构上是如何平衡 MCP 的无状态特性与会话状态管理（Session State）的？状态是存储在客户端、MCP Server 内存，还是外部存储如 Redis？",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 9,
+    "agent": "sysdes",
+    "question": "引入 MQ 解耦确实能提升吞吐，但架构设计核心在于 Trade-off。考虑到 Agent 交互通常需要低延迟反馈，异步索引更新带来的最终一致性是否会影响到用户查询的准确性（例如刚提交的代码搜不到）？你如何权衡这种一致性与实时性要求？另外，我刚才关心的会话状态（Session State）在这个分布式架构中打算如何安置，以避免状态丢失或不一致？",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 10,
+    "agent": "sysdes",
+    "question": "Redis 缓存查询结果确实能提升性能，但这似乎回避了‘会话状态（Session State）’的核心问题。查询缓存是只读的优化，而会话状态涉及读写和多轮上下文累积。如果用户第二轮请求被负载均衡到另一个无状态服务实例，它如何获取第一轮的记忆？你打算如何在 Redis 中组织这个会话数据结构？又如何保证多 Agent 并发写入同一会话时的数据一致性？",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 11,
+    "agent": "leader",
+    "question": "Celery 确实能解决阻塞问题，但也会引入运维复杂度和潜在的一致性风险。回顾 DiabEyeDet 项目，如果现在让你重新设计，你会保留这个异步架构吗？为什么？",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 12,
+    "agent": "leader",
+    "question": "```json\n{\n  \"question\": \"FastAPI 和 Pydantic 确实是不错的组合。但我更关心 Celery+Redis 这一层引入的运维成本。在项目初期，是否有具体的并发数据或响应超时指标，让你认为同步方案无法满足需求？我想了解这个复杂架构带来的实际 ROI。\",\n  \"evaluation_score\": 0.4,\n  \"key_weaknesses\": [\n    \"回",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 13,
+    "agent": "hr",
+    "question": "投入两周时间调研底层工具体现了你的钻研精神，但在业务迭代中，过度设计往往是隐患。如果当时项目周期压缩一半，你会如何权衡这个方案的取舍？请具体说说你判断技术收益大于时间成本的依据是什么。",
+    "finished": false,
+    "token": 0,
+    "total_token": 0
+  },
+  {
+    "turn": 14,
+    "agent": "scribe",
+    "question": "",
+    "finished": true,
+    "token": 0,
+    "total_token": 0
+  }
+]
