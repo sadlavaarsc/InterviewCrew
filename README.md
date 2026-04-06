@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/LangGraph-✓-green.svg" alt="LangGraph">
+  <img src="https://img.shields.io/badge/LangChain-Core-green.svg" alt="LangChain">
   <img src="https://img.shields.io/badge/FastAPI-✓-009688.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/Multi--Agent-5_roles-purple.svg" alt="5 Agents">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
@@ -500,7 +500,7 @@ tests/                      # pytest suite (19 tests)
 
 ## 🛠️ Roadmap
 
-- [x] Core multi-agent architecture with LangGraph
+- [x] Core multi-agent architecture with LangChain LCEL
 - [x] 5 specialist agents with isolated memory
 - [x] Budget governance & conflict arbitration
 - [x] Configurable interview rounds

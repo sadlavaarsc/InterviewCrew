@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/LangGraph-✓-green.svg" alt="LangGraph">
+  <img src="https://img.shields.io/badge/LangChain-Core-green.svg" alt="LangChain">
   <img src="https://img.shields.io/badge/FastAPI-✓-009688.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/Multi--Agent-5_roles-purple.svg" alt="5 Agents">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
@@ -507,7 +507,7 @@ tests/                      # 测试套件（19 项测试）
 
 ## 🛠️ 路线图
 
-- [x] 基于 LangGraph 的核心多 Agent 架构
+- [x] 基于 LangChain LCEL 的核心多 Agent 架构
 - [x] 5 位专业面试官，独立记忆隔离
 - [x] 预算治理与冲突仲裁机制
 - [x] 可配置的面试轮次
