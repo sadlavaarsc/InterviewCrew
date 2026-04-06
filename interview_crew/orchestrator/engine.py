@@ -384,16 +384,25 @@ class Orchestrator:
         return self._enabled_rounds[self._current_round_index]
 
     def _finish_interview(self, estimated_tokens: int = 0, model_used: str = "") -> StepResult:
-        """结束面试"""
+        """结束面试并生成最终报告。"""
         self.state.status = "finished"
-        report = self._generate_report()
+        report, scribe_tokens, scribe_model = self._generate_report()
+
+        # Combine tokens from final turn (if any) with scribe report generation
+        total_tokens = estimated_tokens + scribe_tokens
+
+        # If we have a model from the last turn, use it; otherwise use scribe's model
+        # For the final result, we track scribe's token consumption separately
+        # But the API expects a single model_used - we prioritize the last turn's model
+        final_model = model_used or scribe_model
+
         return self._build_step_result(
             agent="scribe",
             question="",
             finished=True,
             report=report,
-            estimated_tokens=estimated_tokens,
-            model_used=model_used,
+            estimated_tokens=total_tokens,
+            model_used=final_model,
         )
 
     def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
@@ -743,9 +752,16 @@ class Orchestrator:
 
         return "\n".join(context_parts)
 
-    def _generate_report(self) -> str:
+    def _generate_report(self) -> tuple[str, int, str]:
+        """Generate final interview report and return (report, estimated_tokens, model_used).
+
+        Returns:
+            tuple: (report_text, estimated_tokens, model_used)
+        """
+        from interview_crew.config import settings
+
         if not self.state.transfer_queue:
-            return "暂无面评数据。"
+            return "暂无面评数据。", 0, ""
 
         # Use scribe agent to generate final report
         scribe = self.agents["scribe"]
@@ -775,12 +791,25 @@ class Orchestrator:
             recommended_focus="基于完整面试记录生成最终面评报告",
         )
 
+        # Estimate tokens for report generation
+        estimated = scribe.estimate_tokens(
+            synthetic_distillate,
+            full_context,
+            self.state.get_agent_history("scribe"),
+            business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
+        )
+
+        # Scribe uses flash model
+        model_used = settings.qwen_flash_model
+
         output = scribe.invoke(
             synthetic_distillate,
             candidate_response=full_context,  # 传递完整的上下文作为 candidate_response
             history=self.state.get_agent_history("scribe"),
             business_context=self._business_context_text(),
             resume_context=self.state.resume_text,
+            forced_model=model_used,
         )
 
         # Record scribe interaction
@@ -791,4 +820,9 @@ class Orchestrator:
         }
         self.state.append_agent_history("scribe", assistant_msg)
         self.state.append_unified(assistant_msg)
-        return output.question
+
+        # Consume budget for scribe
+        self.budget_guardian.consume(estimated)
+        self.state.total_budget_consumed += estimated
+
+        return output.question, estimated, model_used
