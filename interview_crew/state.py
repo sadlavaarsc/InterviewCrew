@@ -45,6 +45,10 @@ class InterviewState:
     conflict_flag: bool = False
     total_budget_consumed: int = 0
 
+    # Persistent round tracking for orchestrator session recovery
+    round_turn_counts: Dict[str, int] = field(default_factory=dict)
+    current_round_index: int = 0
+
     # Sub-stage management for Tech Agents
     tech1_sub_stage: str = "chat"  # chat -> coding -> reflect -> done
     tech2_sub_stage: str = "chat"
