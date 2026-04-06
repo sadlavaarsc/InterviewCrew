@@ -207,6 +207,13 @@ class Orchestrator:
 
     def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
         """Process Tech Agent with sub-stages (chat -> coding -> reflect)."""
+        # Check global turn limit first (fixes BUG-001)
+        effective_max_turns = self._get_effective_max_turns()
+        if self.state.turn >= effective_max_turns:
+            self.state.status = "finished"
+            report = self._generate_report()
+            return StepResult(agent="scribe", question="", finished=True, report=report)
+
         agent = self.agents[agent_name]
         sub_stage = self.state.get_sub_stage(agent_name)
 

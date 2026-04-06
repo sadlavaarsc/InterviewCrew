@@ -226,3 +226,36 @@ def test_full_interview_flow_with_rounds_config(monkeypatch):
     assert result.finished is True
     # The turn limit should have been reached
     assert state.turn <= config.total_max_turns
+
+
+def test_total_max_turns_enforced_in_sub_stage(monkeypatch):
+    """验证 total_max_turns 在 Tech Agent sub-stage 处理时也被正确执行 (BUG-001)。"""
+    from interview_crew.llm.client import llm as llm_client
+    monkeypatch.setattr(llm_client, "invoke", _fake_llm_invoke)
+
+    config = InterviewConfig(
+        total_max_turns=3,  # 设置较低的全局限制
+        rounds={
+            "tech1": InterviewRoundConfig(max_turns=10, max_chat_turns=5, max_reflect_turns=5),
+            "tech2": InterviewRoundConfig(enabled=False),
+            "sysdes": InterviewRoundConfig(enabled=False),
+            "leader": InterviewRoundConfig(enabled=False),
+            "hr": InterviewRoundConfig(enabled=False),
+        }
+    )
+    state = InterviewState(session_id="test-turn-limit-001", config=config)
+    # Tech1 处于 chat sub-stage
+    state.current_agent = "tech1"
+    state.tech1_sub_stage = "chat"
+    state.tech1_stage_turns = 0
+    state.turn = 2  # 当前 turn=2，下一步 turn=3 应该触发限制
+
+    orch = Orchestrator(state, jd_parser=FakeJDParser())
+
+    # step 调用: turn 2 -> 3，达到 total_max_turns=3 限制
+    result = orch.step("回答")
+
+    # 应该终止面试，而不是继续 tech1 sub-stage
+    assert result.finished is True
+    assert state.turn == 3
+    assert state.status == "finished"
