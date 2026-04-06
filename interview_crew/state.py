@@ -45,6 +45,10 @@ class InterviewState:
     conflict_flag: bool = False
     total_budget_consumed: int = 0
 
+    # Token tracking for comparison testing (new)
+    total_plus_token_consumed: int = 0  # Full model (qwen-plus)
+    total_flash_token_consumed: int = 0  # Downgrade model (qwen-flash)
+
     # Persistent round tracking for orchestrator session recovery
     round_turn_counts: Dict[str, int] = field(default_factory=dict)
     current_round_index: int = 0

@@ -93,7 +93,61 @@ class Orchestrator:
         # Initialize quota manager
         self._quota = TurnQuotaManager(self.state.config, self.state)
 
+        # Load token tracking from state (for session recovery)
+        self._total_plus_token_consumed: int = getattr(self.state, 'total_plus_token_consumed', 0)
+        self._total_flash_token_consumed: int = getattr(self.state, 'total_flash_token_consumed', 0)
+
         self._maybe_load_files()
+
+    def _build_step_result(
+        self,
+        agent: str,
+        question: str,
+        finished: bool = False,
+        report: str = "",
+        estimated_tokens: int = 0,
+        model_used: str = "",
+    ) -> StepResult:
+        """Build StepResult with proper token statistics."""
+        from interview_crew.config import settings
+
+        # Determine if plus or flash model was used
+        is_plus = model_used == settings.qwen_plus_model or (not model_used and not hasattr(settings, 'qwen_flash_model'))
+        is_flash = model_used == settings.qwen_flash_model
+
+        # Calculate this turn's token breakdown
+        plus_this_turn = estimated_tokens if is_plus else 0
+        flash_this_turn = estimated_tokens if is_flash else 0
+
+        # Update cumulative counters
+        if is_plus:
+            self._total_plus_token_consumed += estimated_tokens
+        elif is_flash:
+            self._total_flash_token_consumed += estimated_tokens
+        else:
+            # Default to plus if unknown
+            self._total_plus_token_consumed += estimated_tokens
+
+        # Persist to state for session recovery
+        self.state.total_plus_token_consumed = self._total_plus_token_consumed
+        self.state.total_flash_token_consumed = self._total_flash_token_consumed
+
+        # Calculate totals
+        total_this_turn = estimated_tokens
+        total_consumed = self._total_plus_token_consumed + self._total_flash_token_consumed
+
+        return StepResult(
+            agent=agent,
+            question=question,
+            finished=finished,
+            report=report,
+            token_consumed_this_turn=total_this_turn,
+            total_token_consumed=total_consumed,
+            plus_token_consumed_this_turn=plus_this_turn,
+            flash_token_consumed_this_turn=flash_this_turn,
+            total_plus_token_consumed=self._total_plus_token_consumed,
+            total_flash_token_consumed=self._total_flash_token_consumed,
+        )
 
     def _get_current_round_index(self) -> int:
         """Get the index of current agent in enabled rounds."""
@@ -229,7 +283,14 @@ class Orchestrator:
         if result.action == QuotaAction.FINISH:
             self.state.status = "finished"
             report = self._generate_report()
-            return StepResult(agent="scribe", question="", finished=True, report=report)
+            return self._build_step_result(
+                agent="scribe",
+                question="",
+                finished=True,
+                report=report,
+                estimated_tokens=0,
+                model_used="",
+            )
 
         elif result.action == QuotaAction.SWITCH_AGENT:
             # Agent 配额耗尽，切换到下一个
@@ -244,7 +305,14 @@ class Orchestrator:
             if next_agent == "scribe":
                 self.state.status = "finished"
                 report = self._generate_report()
-                return StepResult(agent="scribe", question="", finished=True, report=report)
+                return self._build_step_result(
+                    agent="scribe",
+                    question="",
+                    finished=True,
+                    report=report,
+                    estimated_tokens=0,
+                    model_used="",
+                )
 
             self.state.current_agent = next_agent
             # 重置 sub-stage
@@ -315,11 +383,18 @@ class Orchestrator:
             return "scribe"
         return self._enabled_rounds[self._current_round_index]
 
-    def _finish_interview(self) -> StepResult:
+    def _finish_interview(self, estimated_tokens: int = 0, model_used: str = "") -> StepResult:
         """结束面试"""
         self.state.status = "finished"
         report = self._generate_report()
-        return StepResult(agent="scribe", question="", finished=True, report=report)
+        return self._build_step_result(
+            agent="scribe",
+            question="",
+            finished=True,
+            report=report,
+            estimated_tokens=estimated_tokens,
+            model_used=model_used,
+        )
 
     def _process_tech_agent_sub_stage(self, agent_name: str, candidate_response: str) -> StepResult:
         """Process Tech Agent with sub-stages (chat -> coding -> reflect).
@@ -467,7 +542,13 @@ class Orchestrator:
         )
         self.state.transfer_queue.append(pkg)
 
-        return StepResult(agent=agent_name, question=output.question, finished=False)
+        return self._build_step_result(
+            agent=agent_name,
+            question=output.question,
+            finished=False,
+            estimated_tokens=estimated,
+            model_used=forced_model or agent.preferred_model,
+        )
 
     def _process_standard_agent(self, agent_name: str, candidate_response: str) -> StepResult:
         """Process standard agent without sub-stages."""
@@ -543,7 +624,13 @@ class Orchestrator:
         )
         self.state.transfer_queue.append(pkg)
 
-        return StepResult(agent=agent_name, question=output.question, finished=False)
+        return self._build_step_result(
+            agent=agent_name,
+            question=output.question,
+            finished=False,
+            estimated_tokens=estimated,
+            model_used=forced_model or agent.preferred_model,
+        )
 
     def _business_context_text(self) -> str:
         if not self.state.business_context:
