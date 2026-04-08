@@ -30,9 +30,10 @@
 
 ```
 ┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
-│  CLI/前端   │  ◄──────────────►  │        FastAPI Backend              │
-│  (cli.py)   │                    │  ┌───────────────────────────────┐  │
-└─────────────┘                    │  │  /sessions      ──创建会话     │  │
+│ Web / CLI   │  ◄──────────────►  │        FastAPI Backend              │
+│  客户端      │                    │  ┌───────────────────────────────┐  │
+└─────────────┘                    │  │  /              ──Web UI       │  │
+                                   │  │  /sessions      ──创建会话     │  │
                                    │  │  /step          ──单轮推进     │  │
                                    │  │  /health        ──健康检查     │  │
                                    │  └───────────────────────────────┘  │
@@ -295,12 +296,33 @@ python -m interview_crew.server
 ```
 
 后端内存维护 `session_id -> Orchestrator` 映射（与当前无持久化设计一致）。核心路由：
+- `GET /` — Web UI 入口（`index.html`）
+- `GET /static/*` — Web 静态资源（CSS/JS）
 - `POST /sessions` — 创建面试会话
 - `POST /sessions/{session_id}/step` — 推进一轮
 - `GET /sessions/{session_id}` — 查询当前会话完整状态
+- `POST /sessions/{session_id}/submit-code` — 提交代码运行测试
+- `GET /sessions/{session_id}/coding-task` — 获取当前代码题目
 - `GET /health` — 健康检查
 
-### 5.3 CLI 前端运行
+### 5.3 Web UI 前端运行
+Web UI 是一个内嵌在后端中的单页应用，零额外构建步骤。启动后端后直接访问根路由即可：
+
+```bash
+python -m interview_crew.server
+# 浏览器打开 http://localhost:8000/
+```
+
+Web UI 功能：
+- **面试配置**：选择启用/禁用轮次、设置总回合数、填写岗位与简历
+- **实时对话**：左侧聊天区展示各 agent 的问题与候选人回复，带 agent 标签着色
+- **代码考核**：进入 `coding` sub-stage 时自动加载题目，支持在线编辑、选择语言、运行测试并查看结果
+- **状态面板**：右侧实时显示当前面试官、回合数、Token 消耗统计
+- **面评报告**：面试结束后展示 Scribe 生成的结构化报告
+
+前端通过原生 `fetch` 直接调用后端的 JSON API，与 CLI 共享同一套接口。
+
+### 5.4 CLI 前端运行
 CLI 现已改造为 HTTP 客户端，通过 `httpx` 调用本地后端：
 
 ```bash
@@ -318,7 +340,7 @@ CLI 逻辑在 `interview_crew/cli.py` 中：
 3. 循环 `POST /sessions/{id}/step` 直到 `finished=True`；
 4. 打印最终 `report`。
 
-### 5.4 纯 API 调用示例
+### 5.5 纯 API 调用示例
 
 #### 基础示例（向后兼容）
 ```bash
@@ -338,7 +360,7 @@ curl -X POST http://127.0.0.1:8000/sessions/<session_id>/step \
 curl http://127.0.0.1:8000/sessions/<session_id>
 ```
 
-### 5.5 API 兼容性说明
+### 5.6 API 兼容性说明
 
 #### 新老接口共存机制
 
@@ -427,7 +449,7 @@ curl http://127.0.0.1:8000/sessions/<session_id>
 
 3. **向后兼容测试**：迁移后运行 `test_orchestrator.py` 验证行为
 
-### 5.6 测试运行
+### 5.7 测试运行
 ```bash
 # 运行全部测试（pytest 19/19 通过）
 conda activate agentEnv && pytest tests/ -v
@@ -633,6 +655,7 @@ interview_crew/
 ├── api.py                  # FastAPI 后端路由与内存会话管理
 ├── server.py               # Uvicorn 启动入口
 ├── cli.py                  # CLI 入口（HTTP 客户端）
+├── static/                 # Web UI (index.html)
 ├── config.py               # Pydantic Settings (.env 读取)
 ├── state.py                # InterviewState dataclass
 ├── baseline/               # 单 Agent Baseline（对比测试用）

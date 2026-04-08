@@ -1,7 +1,10 @@
 import uuid
+from pathlib import Path
 from typing import Dict, List, Optional, Literal, Union
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from interview_crew.state import InterviewState
@@ -527,3 +530,13 @@ def get_coding_task(session_id: str) -> CodingTaskResponse:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "sessions": len(_sessions)}
+
+
+# Mount static files for the web frontend
+static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/")
+def root() -> FileResponse:
+    return FileResponse(str(static_dir / "index.html"))

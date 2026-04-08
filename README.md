@@ -264,6 +264,17 @@ ARK_API_KEY=your_ark_key
 DASHSCOPE_API_KEY=your_dashscope_key
 ```
 
+### Run Web UI
+
+```bash
+# Start backend
+python -m interview_crew.server
+
+# Open browser at http://localhost:8000/
+```
+
+The Web UI supports round configuration (enable/disable agents), real-time chat, coding task editor with test execution, token usage stats, and final report display.
+
 ### Run CLI Demo
 
 ```bash
@@ -365,9 +376,10 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 
 ```
 ┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
-│   CLI/API   │  ◄──────────────►  │        FastAPI Backend              │
+│  Web / CLI  │  ◄──────────────►  │        FastAPI Backend              │
 │   Client    │                    │  ┌───────────────────────────────┐  │
-└─────────────┘                    │  │  /sessions      ──Create      │  │
+└─────────────┘                    │  │  /              ──Web UI      │  │
+                                   │  │  /sessions      ──Create      │  │
                                    │  │  /step          ──Progress    │  │
                                    │  │  /health        ──Health      │  │
                                    │  └───────────────────────────────┘  │
@@ -477,9 +489,10 @@ test_api.py::test_full_interview_flow PASSED
 
 ```
 interview_crew/
-├── api.py                  # FastAPI routes
+├── api.py                  # FastAPI routes + static files
 ├── server.py               # Uvicorn entry
 ├── cli.py                  # CLI client
+├── static/                 # Web UI (index.html)
 ├── config.py               # Pydantic settings
 ├── state.py                # InterviewState dataclass
 ├── protocol/schemas.py     # TransferPackage, MemoryDistillate
@@ -505,7 +518,7 @@ tests/                      # pytest suite (19 tests)
 - [x] Budget governance & conflict arbitration
 - [x] Configurable interview rounds
 - [ ] Persistent session storage (currently in-memory)
-- [ ] Web UI for visual interview management
+- [x] Web UI for visual interview management
 - [x] Baseline evaluation: Single Agent vs Multi-Agent
 - [ ] Support for custom agent personas
 

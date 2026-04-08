@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InterviewCrew - 多 Agent 面试模拟器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .msg-assistant { background: #f3f4f6; border-left: 4px solid #6366f1; }
+    .msg-user { background: #e0e7ff; border-left: 4px solid #4338ca; margin-left: auto; }
+    .agent-tag { font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; }
+    .agent-tech1 { background: #dbeafe; color: #1e40af; }
+    .agent-tech2 { background: #dcfce7; color: #166534; }
+    .agent-sysdes { background: #fef3c7; color: #92400e; }
+    .agent-leader { background: #fce7f3; color: #9d174d; }
+    .agent-hr { background: #f3e8ff; color: #7c3aed; }
+    .agent-scribe { background: #e5e7eb; color: #374151; }
+    .agent-default { background: #e5e7eb; color: #374151; }
+    .spinner { border: 3px solid #e5e7eb; border-top: 3px solid #6366f1; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen">
+
+<!-- Setup Page -->
+<div id="setup-page" class="max-w-2xl mx-auto p-6">
+  <div class="bg-white rounded-2xl shadow p-8 mt-10">
+    <h1 class="text-2xl font-bold mb-2 text-indigo-700">InterviewCrew</h1>
+    <p class="text-gray-500 mb-6">多 Agent 面试模拟器 Web 端</p>
+
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">岗位</label>
+        <input id="position" type="text" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="例如：后端开发工程师">
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">简历简述</label>
+        <textarea id="resume" rows="4" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="简要描述你的工作经历、技术栈、项目经验..."></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">职位描述（JD）简述</label>
+        <textarea id="jd" rows="3" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="简要描述岗位要求..."></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-2">面试轮次</label>
+        <div class="flex flex-wrap gap-3">
+          <label class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg cursor-pointer select-none">
+            <input type="checkbox" class="round-enable" value="tech1" checked>
+            <span class="text-sm">技术一面 (tech1)</span>
+          </label>
+          <label class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg cursor-pointer select-none">
+            <input type="checkbox" class="round-enable" value="tech2" checked>
+            <span class="text-sm">技术二面 (tech2)</span>
+          </label>
+          <label class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg cursor-pointer select-none">
+            <input type="checkbox" class="round-enable" value="sysdes" checked>
+            <span class="text-sm">系统设计 (sysdes)</span>
+          </label>
+          <label class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg cursor-pointer select-none">
+            <input type="checkbox" class="round-enable" value="leader" checked>
+            <span class="text-sm"> leader 面</span>
+          </label>
+          <label class="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg cursor-pointer select-none">
+            <input type="checkbox" class="round-enable" value="hr" checked>
+            <span class="text-sm">HR 面</span>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">总最大回合数</label>
+        <input id="total-max-turns" type="number" min="1" max="100" value="30" class="w-32 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      </div>
+
+      <button id="btn-start" onclick="startInterview()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition flex items-center justify-center gap-2">
+        <span>开始面试</span>
+      </button>
+      <p id="setup-error" class="text-red-600 text-sm hidden"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Interview Page -->
+<div id="interview-page" class="hidden max-w-6xl mx-auto p-4 h-screen flex flex-col">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-bold text-indigo-700">面试进行中</h2>
+    <div class="text-sm text-gray-500 flex items-center gap-4">
+      <span id="status-agent" class="px-2 py-1 rounded bg-gray-100 font-medium">agent: -</span>
+      <span id="status-turn">turn: - / -</span>
+      <span id="status-tokens">tokens: -</span>
+    </div>
+  </div>
+
+  <div class="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 min-h-0">
+    <!-- Chat Area -->
+    <div class="md:col-span-2 flex flex-col min-h-0 bg-white rounded-xl shadow">
+      <div id="chat-list" class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- messages will be injected here -->
+      </div>
+
+      <!-- Input Area -->
+      <div class="border-t p-4">
+        <div id="normal-input">
+          <div class="flex gap-2">
+            <textarea id="user-input" rows="2" class="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" placeholder="输入你的回答..."></textarea>
+            <button onclick="sendReply()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 rounded-lg font-medium transition">发送</button>
+          </div>
+        </div>
+
+        <!-- Coding Area -->
+        <div id="coding-input" class="hidden space-y-3">
+          <div class="bg-gray-50 rounded-lg p-3 border">
+            <div class="flex items-center justify-between mb-1">
+              <span id="coding-title" class="font-semibold text-gray-800"></span>
+              <span id="coding-difficulty" class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700"></span>
+            </div>
+            <p id="coding-desc" class="text-sm text-gray-600 mb-2"></p>
+            <label class="text-xs font-medium text-gray-500">语言</label>
+            <select id="coding-lang" class="ml-2 text-sm border rounded px-2 py-1">
+              <option value="python">Python</option>
+              <option value="javascript">JavaScript</option>
+              <option value="java">Java</option>
+              <option value="go">Go</option>
+            </select>
+          </div>
+          <textarea id="code-editor" rows="8" class="w-full border rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="在此编写代码..."></textarea>
+          <div class="flex gap-2">
+            <button onclick="submitCode()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg font-medium transition">运行测试</button>
+            <button onclick="skipCoding()" class="text-gray-600 hover:text-gray-800 px-4 py-2 rounded-lg font-medium transition">跳过 / 直接回复</button>
+          </div>
+          <div id="coding-result" class="hidden space-y-2"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Panel -->
+    <div class="md:col-span-1 bg-white rounded-xl shadow p-4 space-y-4 overflow-y-auto">
+      <div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide font-semibold">当前面试官</div>
+        <div id="panel-agent" class="text-lg font-bold text-indigo-700">-</div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide font-semibold">回合</div>
+        <div id="panel-turn" class="text-base font-medium">- / -</div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide font-semibold">Token 消耗</div>
+        <div id="panel-tokens" class="text-base font-medium">-</div>
+        <div class="mt-1 text-xs text-gray-500">
+          <div>Plus: <span id="panel-plus">-</span></div>
+          <div>Flash: <span id="panel-flash">-</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide font-semibold">模式</div>
+        <div id="panel-mode" class="text-base font-medium">-</div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide font-semibold">Session ID</div>
+        <div id="panel-session" class="text-xs font-mono text-gray-600 break-all">-</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Result Page -->
+<div id="result-page" class="hidden max-w-3xl mx-auto p-6">
+  <div class="bg-white rounded-2xl shadow p-8 mt-6">
+    <h2 class="text-2xl font-bold text-indigo-700 mb-2">面试结束</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-gray-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-gray-400">总回合</div>
+        <div id="res-turn" class="text-xl font-bold">-</div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-gray-400">Token 消耗</div>
+        <div id="res-tokens" class="text-xl font-bold">-</div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-gray-400">Plus 调用</div>
+        <div id="res-plus" class="text-xl font-bold">-</div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-gray-400">Flash 调用</div>
+        <div id="res-flash" class="text-xl font-bold">-</div>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold mb-2">面评报告</h3>
+    <div id="res-report" class="bg-gray-50 rounded-lg p-4 text-gray-800 leading-relaxed whitespace-pre-wrap"></div>
+
+    <div class="mt-6 flex gap-3">
+      <button onclick="location.reload()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition">再面一次</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = `${location.protocol}//${location.host}`;
+  let sessionId = null;
+  let isLoading = false;
+  let currentCandidateResponse = "";
+
+  function el(id) { return document.getElementById(id); }
+
+  function setLoading(loading) {
+    isLoading = loading;
+    const btn = el('btn-start');
+    if (btn) btn.disabled = loading;
+  }
+
+  function addMessage(role, agent, text) {
+    const list = el('chat-list');
+    const div = document.createElement('div');
+    const isUser = role === 'user';
+    div.className = `max-w-[85%] rounded-xl p-4 ${isUser ? 'msg-user' : 'msg-assistant'}`;
+
+    let agentHtml = '';
+    if (!isUser && agent) {
+      const cls = `agent-${agent}` || 'agent-default';
+      agentHtml = `<span class="agent-tag ${cls} mb-1 inline-block">${agent.toUpperCase()}</span><br>`;
+    }
+
+    const content = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    div.innerHTML = `${agentHtml}<div class="text-sm leading-relaxed">${content}</div>`;
+    list.appendChild(div);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function showPage(name) {
+    ['setup-page', 'interview-page', 'result-page'].forEach(id => {
+      document.getElementById(id).classList.add('hidden');
+    });
+    el(`${name}-page`).classList.remove('hidden');
+  }
+
+  function getAgentClass(agent) {
+    const map = { tech1:'agent-tech1', tech2:'agent-tech2', sysdes:'agent-sysdes', leader:'agent-leader', hr:'agent-hr', scribe:'agent-scribe' };
+    return map[agent] || 'agent-default';
+  }
+
+  async function startInterview() {
+    const position = el('position').value.trim();
+    const resume = el('resume').value.trim();
+    const jd = el('jd').value.trim();
+    if (!position || !resume) {
+      el('setup-error').textContent = '请填写岗位和简历简述';
+      el('setup-error').classList.remove('hidden');
+      return;
+    }
+    el('setup-error').classList.add('hidden');
+    setLoading(true);
+
+    currentCandidateResponse = `岗位：${position}。简历：${resume}` + (jd ? `。JD：${jd}` : '');
+
+    const rounds = {};
+    document.querySelectorAll('.round-enable').forEach(cb => {
+      const maxTurns = cb.value.startsWith('tech') ? 6 : (cb.value === 'sysdes' ? 4 : 3);
+      rounds[cb.value] = { enabled: cb.checked, max_turns: maxTurns };
+    });
+
+    const totalMaxTurns = parseInt(el('total-max-turns').value, 10) || 30;
+
+    try {
+      const resp = await fetch(`${API_BASE}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          candidate_response: currentCandidateResponse,
+          total_max_turns: totalMaxTurns,
+          rounds_config: rounds
+        })
+      });
+      if (!resp.ok) throw new Error('创建会话失败: ' + resp.status);
+      const data = await resp.json();
+      sessionId = data.session_id;
+      showPage('interview');
+      // initial step with candidate response
+      await postStep(currentCandidateResponse);
+    } catch (e) {
+      el('setup-error').textContent = e.message;
+      el('setup-error').classList.remove('hidden');
+      setLoading(false);
+    }
+  }
+
+  async function postStep(candidateResponse) {
+    if (!sessionId) return;
+    setLoading(true);
+    showNormalInput(true);
+    hideCoding();
+
+    try {
+      const resp = await fetch(`${API_BASE}/sessions/${sessionId}/step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_response: candidateResponse })
+      });
+      if (!resp.ok) throw new Error('请求失败: ' + resp.status);
+      const data = await resp.json();
+      await handleStepResponse(data);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleStepResponse(data) {
+    if (data.question) {
+      addMessage('assistant', data.agent, data.question);
+    }
+    await updateStatus();
+
+    if (data.finished) {
+      showResult(data);
+      return;
+    }
+
+    // Check coding task
+    await checkCodingTask();
+  }
+
+  function showNormalInput(show) {
+    el('normal-input').classList.toggle('hidden', !show);
+  }
+
+  function hideCoding() {
+    el('coding-input').classList.add('hidden');
+    el('coding-result').classList.add('hidden');
+    el('coding-result').innerHTML = '';
+  }
+
+  async function checkCodingTask() {
+    if (!sessionId) return;
+    try {
+      const resp = await fetch(`${API_BASE}/sessions/${sessionId}/coding-task`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.has_active_task) {
+        showNormalInput(false);
+        el('coding-input').classList.remove('hidden');
+        el('coding-title').textContent = data.title || '编程题';
+        el('coding-difficulty').textContent = (data.difficulty || 'easy').toUpperCase();
+        el('coding-desc').textContent = data.description || '';
+        el('code-editor').value = data.starter_code || '';
+        return;
+      }
+    } catch (e) { /* ignore */ }
+    showNormalInput(true);
+    hideCoding();
+  }
+
+  async function sendReply() {
+    const input = el('user-input');
+    const text = input.value.trim();
+    if (!text) return;
+    addMessage('user', null, text);
+    input.value = '';
+    await postStep(text);
+  }
+
+  async function submitCode() {
+    if (!sessionId) return;
+    const code = el('code-editor').value;
+    const lang = el('coding-lang').value;
+    setLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE}/sessions/${sessionId}/submit-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language: lang })
+      });
+      if (!resp.ok) throw new Error('提交失败: ' + resp.status);
+      const data = await resp.json();
+      renderCodingResult(data);
+
+      if (data.next_question) {
+        // The next_question from submit-code already contains follow-up (+ reflect if any)
+        // We'll let user reply normally; but first show it as assistant message
+        // Determine agent from session state
+        const stateResp = await fetch(`${API_BASE}/sessions/${sessionId}`);
+        const state = stateResp.ok ? await stateResp.json() : {};
+        addMessage('assistant', state.current_agent || 'tech', data.next_question);
+        await updateStatus();
+      }
+
+      showNormalInput(true);
+      hideCoding();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function skipCoding() {
+    showNormalInput(true);
+    hideCoding();
+  }
+
+  function renderCodingResult(data) {
+    const container = el('coding-result');
+    container.classList.remove('hidden');
+    let html = '';
+    const compileOk = data.compile_success;
+    html += `<div class="text-sm font-medium ${compileOk ? 'text-emerald-600' : 'text-red-600'}">${compileOk ? '编译成功' : '编译失败 / 运行错误'}</div>`;
+    if (data.compile_output) {
+      html += `<pre class="bg-gray-900 text-gray-100 text-xs rounded p-2">${data.compile_output.replace(/</g,'&lt;')}</pre>`;
+    }
+    if (data.test_results && data.test_results.length) {
+      html += `<div class="grid grid-cols-1 gap-2">`;
+      data.test_results.forEach(t => {
+        const color = t.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200';
+        html += `
+          <div class="border rounded p-2 text-sm ${color}">
+            <div class="font-medium">用例 ${t.case_id}: ${t.passed ? '通过' : '失败'}</div>
+            <div class="text-xs mt-1">输入: ${(t.input_data||'').replace(/</g,'&lt;')} | 期望: ${(t.expected||'').replace(/</g,'&lt;')} | 实际: ${(t.actual||'').replace(/</g,'&lt;')}</div>
+            ${t.error_message ? `<div class="text-xs mt-1">${t.error_message.replace(/</g,'&lt;')}</div>` : ''}
+          </div>`;
+      });
+      html += `</div>`;
+    }
+    container.innerHTML = html;
+  }
+
+  async function updateStatus() {
+    if (!sessionId) return;
+    try {
+      const resp = await fetch(`${API_BASE}/sessions/${sessionId}`);
+      if (!resp.ok) return;
+      const s = await resp.json();
+
+      const agent = s.current_agent || '-';
+      const agentCls = getAgentClass(agent);
+
+      el('status-agent').textContent = agent;
+      el('status-agent').className = `px-2 py-1 rounded text-white text-sm font-medium ${agentCls.replace('agent-', 'bg-')}`; // simplistic, but okay
+      // Actually just reset classes:
+      el('status-agent').className = `px-2 py-1 rounded font-medium text-sm ${agentCls}`;
+
+      el('status-turn').textContent = `turn: ${s.turn} / ${s.total_max_turns}`;
+      el('status-tokens').textContent = `tokens: ${s.total_budget_consumed || 0}`;
+
+      el('panel-agent').textContent = agent.toUpperCase();
+      el('panel-turn').textContent = `${s.turn} / ${s.total_max_turns}`;
+      el('panel-tokens').textContent = s.total_budget_consumed || 0;
+      el('panel-plus').textContent = s.total_plus_token_consumed || 0;
+      el('panel-flash').textContent = s.total_flash_token_consumed || 0;
+      el('panel-mode').textContent = s.mode || 'multi_agent';
+      el('panel-session').textContent = s.session_id;
+    } catch (e) { /* ignore polling errors */ }
+  }
+
+  function showResult(data) {
+    showPage('result');
+    el('res-report').textContent = data.report || '（无面评报告）';
+    // Also fetch latest state for stats
+    fetch(`${API_BASE}/sessions/${sessionId}`).then(r => r.json()).then(s => {
+      el('res-turn').textContent = `${s.turn} / ${s.total_max_turns}`;
+      el('res-tokens').textContent = s.total_budget_consumed || 0;
+      el('res-plus').textContent = s.total_plus_token_consumed || 0;
+      el('res-flash').textContent = s.total_flash_token_consumed || 0;
+    }).catch(() => {});
+  }
+
+  // Enter key to send in normal input
+  el('user-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendReply();
+    }
+  });
+</script>
+</body>
+</html>

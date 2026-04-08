@@ -271,6 +271,17 @@ ARK_API_KEY=your_ark_key
 DASHSCOPE_API_KEY=your_dashscope_key
 ```
 
+### 使用 Web UI
+
+```bash
+# 启动后端
+python -m interview_crew.server
+
+# 浏览器访问 http://localhost:8000/
+```
+
+Web 界面支持：选择面试轮次、实时对话、代码编辑器与运行测试、Token 消耗统计、面评报告展示。
+
 ### 运行 CLI 演示
 
 ```bash
@@ -372,9 +383,10 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 
 ```
 ┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
-│   CLI/API   │  ◄──────────────►  │        FastAPI 后端                 │
+│ Web / CLI   │  ◄──────────────►  │        FastAPI 后端                 │
 │   客户端     │                    │  ┌───────────────────────────────┐  │
-└─────────────┘                    │  │  /sessions      ──创建会话     │  │
+└─────────────┘                    │  │  /              ──Web 界面     │  │
+                                   │  │  /sessions      ──创建会话     │  │
                                    │  │  /step          ──推进面试     │  │
                                    │  │  /health        ──健康检查     │  │
                                    │  └───────────────────────────────┘  │
@@ -484,9 +496,10 @@ test_api.py::test_full_interview_flow PASSED
 
 ```
 interview_crew/
-├── api.py                  # FastAPI 路由
+├── api.py                  # FastAPI 路由 + 静态文件
 ├── server.py               # Uvicorn 入口
 ├── cli.py                  # CLI 客户端
+├── static/                 # Web UI (index.html)
 ├── config.py               # Pydantic 配置
 ├── state.py                # InterviewState 数据类
 ├── protocol/schemas.py     # TransferPackage、MemoryDistillate
@@ -512,7 +525,7 @@ tests/                      # 测试套件（19 项测试）
 - [x] 预算治理与冲突仲裁机制
 - [x] 可配置的面试轮次
 - [ ] 持久化会话存储（当前为内存存储）
-- [ ] Web UI 可视化面试管理
+- [x] Web UI 可视化面试界面
 - [x] 基线评估：单 Agent vs 多 Agent 对比
 - [ ] 支持自定义面试官人设
 

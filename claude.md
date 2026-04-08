@@ -34,7 +34,10 @@ DASHSCOPE_API_KEY=xxx
 # 3. 启动后端
 conda activate agentEnv && python -m interview_crew.server
 
-# 4. 运行 CLI 演示（另开终端）
+# 4a. 使用 Web UI（推荐）
+# 浏览器访问 http://localhost:8000/
+
+# 4b. 运行 CLI 演示（另开终端）
 conda activate agentEnv && python -m interview_crew.cli --turns 6 --resume data/samples/resume.md --jd data/samples/jd.md
 ```
 
@@ -48,7 +51,8 @@ interview_crew/        # 核心代码
 ├── orchestrator/      # 编排器 + 预算控制 + 冲突仲裁
 ├── memory/            # 记忆蒸馏 + 邮箱隔离
 ├── tools/             # 工具注册
-└── prompts/           # 系统提示词
+├── prompts/           # 系统提示词
+└── static/            # Web UI (index.html)
 
 reports/               # 审计报告、测试反馈、扩展计划
 data/                  # 测试记录、样本数据
@@ -77,9 +81,10 @@ curl http://localhost:8000/sessions/{session_id}
 ## 注意事项
 
 1. **环境隔离**：所有 Python 命令必须通过 `conda activate agentEnv &&` 前缀执行
-2. **API 依赖**：CLI 是 HTTP 客户端，必须先启动后端 (`python -m interview_crew.server`)
-3. **测试数据**：样本简历/JD 存放在 `data/samples/`，测试记录保存在 `data/records/`
-4. **模型配置**：支持 Ark + DashScope 双模型自动 fallback
+2. **服务依赖**：CLI 和 Web UI 都是后端 API 的客户端，必须先启动后端 (`python -m interview_crew.server`)
+3. **Web UI**：`http://localhost:8000/` 提供可视化面试界面，支持轮次配置、代码考核、实时统计
+4. **测试数据**：样本简历/JD 存放在 `data/samples/`，测试记录保存在 `data/records/`
+5. **模型配置**：支持 Ark + DashScope 双模型自动 fallback
 
 ---
 
@@ -91,4 +96,4 @@ curl http://localhost:8000/sessions/{session_id}
 
 ---
 
-*最后更新: 2026-04-04*
+*最后更新: 2026-04-08*
