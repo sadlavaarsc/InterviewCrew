@@ -392,5 +392,4 @@ sessions_spawn(
 
 *测试方案版本: V4*  
 *最后更新: 2026-04-04*  
-*维护者: Kimi Claw (沈清欢)*  
 *核心改进: Workflow-like SAS，与MAS阶段完全对齐*
