@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 from interview_crew.llm.client import llm
+from interview_crew.llm.model_resolver import get_default_model
 
 
 # Lazy import for web fetching
@@ -19,7 +20,10 @@ except ImportError:
     HAS_REQUESTS = False
 
 
-def _safe_llm_call(messages: list, model: str = "qwen3.5-flash", temperature: float = 0.7, fallback: str = "") -> str:
+_DEFAULT_MODEL = get_default_model()
+
+
+def _safe_llm_call(messages: list, model: str = _DEFAULT_MODEL, temperature: float = 0.7, fallback: str = "") -> str:
     """Safely call LLM with fallback on error."""
     try:
         return llm.invoke(messages, model_name=model, temperature=temperature)

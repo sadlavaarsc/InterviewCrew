@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from interview_crew.protocol.schemas import BusinessContext
 from interview_crew.llm.client import llm
-from interview_crew.config import settings
+from interview_crew.llm.model_resolver import get_default_model
 
 
 class JDParsingStrategy(ABC):
@@ -33,7 +33,7 @@ class LLMJDParser(JDParsingStrategy):
             {"role": "user", "content": jd_markdown},
         ]
         try:
-            raw = llm.invoke(messages, model_name=settings.qwen_flash_model, temperature=0.3)
+            raw = llm.invoke(messages, model_name=get_default_model(), temperature=0.3)
             data = json.loads(raw.strip())
             return BusinessContext(**data)
         except Exception as e:

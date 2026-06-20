@@ -77,6 +77,14 @@
         <input id="total-max-turns" type="number" min="1" max="100" value="30" class="w-32 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
       </div>
 
+      <div>
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input id="stream-mode" type="checkbox" checked class="w-4 h-4 text-indigo-600">
+          <span class="text-sm font-medium">流式模式 (SSE 打字机效果)</span>
+        </label>
+        <p class="text-xs text-gray-400 mt-1">开启后面试官回复将逐字显示，体验更流畅</p>
+      </div>
+
       <button id="btn-start" onclick="startInterview()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition flex items-center justify-center gap-2">
         <span>开始面试</span>
       </button>
@@ -295,18 +303,65 @@
     showNormalInput(true);
     hideCoding();
 
+    const useStream = document.getElementById('stream-mode')?.checked ?? true;
+
     try {
-      const resp = await fetch(`${API_BASE}/sessions/${sessionId}/step`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidate_response: candidateResponse })
-      });
-      if (!resp.ok) throw new Error('请求失败: ' + resp.status);
-      const data = await resp.json();
-      await handleStepResponse(data);
+      if (useStream) {
+        await postStepStream(candidateResponse);
+      } else {
+        const resp = await fetch(`${API_BASE}/sessions/${sessionId}/step`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ candidate_response: candidateResponse })
+        });
+        if (!resp.ok) throw new Error('请求失败: ' + resp.status);
+        const data = await resp.json();
+        await handleStepResponse(data);
+      }
     } finally {
       setLoading(false);
     }
+  }
+
+  async function postStepStream(candidateResponse) {
+    return new Promise((resolve, reject) => {
+      // Use GET with URL-encoded candidate_response for EventSource compatibility
+      const encodedResponse = encodeURIComponent(candidateResponse);
+      const es = new EventSource(`${API_BASE}/sessions/${sessionId}/stream?candidate_response=${encodedResponse}`);
+
+      let currentAgent = '';
+      let currentText = '';
+      let messageEl = null;
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === 'token' || data.token) {
+            if (!messageEl || data.agent !== currentAgent) {
+              currentAgent = data.agent;
+              currentText = '';
+              messageEl = addMessage('assistant', data.agent, '');
+            }
+            currentText += data.token || '';
+            const contentEl = messageEl.querySelector('.msg-content');
+            if (contentEl) contentEl.textContent = currentText;
+          }
+          if (data.event === 'done' || data.finished !== undefined) {
+            es.close();
+            handleStepResponse(data);
+            resolve();
+          }
+        } catch (e) {
+          es.close();
+          reject(e);
+        }
+      };
+
+      es.onerror = (err) => {
+        es.close();
+        reject(new Error('SSE 连接失败'));
+      };
+    });
   }
 
   async function handleStepResponse(data) {

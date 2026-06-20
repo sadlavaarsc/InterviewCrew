@@ -34,10 +34,11 @@
 - **🎭 5 Specialist Agents**: Tech-1 (algorithm), Tech-2 (deep dive), SysDes (architecture), HR (behavioral), Scribe (evaluation) — each with independent memory and persona
 - **🧠 Context Isolation**: Agents only see their own conversation history, preventing "role confusion" common in single-agent systems
 - **📊 Structured Evaluation**: Competency-based scoring with conflict arbitration — when two agents disagree on a dimension, Tech-2 automatically re-evaluates
-- **💰 Production-Grade Cost Control**: **~¥4-20 per interview** (vs ~¥17-34 for single-agent) — 70% calls use cheaper Flash model via BudgetGuardian + Memory Distiller
+- **💰 Production-Grade Cost Control**: **~¥4-20 per interview** (vs ~¥17-34 for single-agent) — 70% calls use cheaper default/economy model via BudgetGuardian + Memory Distiller
 - **🔬 Validated by A/B Testing**: MAS scores **86.2/100** vs SAS **52.5/100** (+64% lead) on role consistency, memory isolation, and technical coverage
 - **🔌 Flexible Configuration**: Enable/disable any interview round, customize turn limits per agent
-- **⚡ Dual Model Fallback**: Ark + DashScope automatic failover for stability
+- **⚡ Dual Model Fallback**: DeepSeek primary + Ark fallback; Qwen/DashScope kept as deprecated compatibility
+- **🔥 Backend Architecture Upgrade (v0.2.0)**: Async streaming SSE, tiktoken precise token counting, Redis session persistence, Prometheus-style /metrics, token bucket rate limiting
 - **🧪 Single Agent Baseline**: Built-in baseline for quantitative comparison — same APIs, fair benchmark
 
 ---
@@ -54,7 +55,7 @@ InterviewCrew includes a **Single Agent Baseline** for quantitative comparison w
 | **Interview Flow** | `tech1 → tech2 → sysdes → leader → hr` | Same hardcoded workflow |
 | **Memory** | Isolated per agent | **Unified history (all stages visible)** |
 | **Role Switching** | Swap Agent instance | **Dynamic prompt拼接** |
-| **Model Strategy** | Per-agent budget with downgrade | Plus for interview, Flash for report |
+| **Model Strategy** | Per-agent budget with downgrade | Premium for interview, default/economy for report |
 | **Key Challenge** | Coordination overhead | **Role confusion & memory pollution** |
 
 ### How SAS "Switches Roles"
@@ -131,15 +132,15 @@ We conducted rigorous A/B testing with identical candidates, resumes, and JDs:
 
 ## 💰 Cost Analysis
 
-> Model pricing: qwen-plus ¥0.8/M input ¥4.8/M output | qwen-flash ¥0.15/M input ¥1.5/M output
+> Model pricing (example): default/economy model ¥0.1/M input ¥0.5/M output | premium/quality model ¥1/M input ¥8/M output — DeepSeek is now the default provider for better long-context pricing
 
 ### Cost Control Architecture
 
 | Mechanism | Implementation | Effect |
 |-----------|---------------|--------|
-| **BudgetGuardian** | Auto-downgrade to Flash when tokens exceed budget | 70% calls use Flash |
-| **Memory Distiller** | Flash model compresses conversation history | 50% context reduction |
-| **Scribe Reports** | Flash model for long report generation | Significant cost savings |
+| **BudgetGuardian** | Auto-downgrade to default/economy model when tokens exceed budget | 70% calls use cheaper tier |
+| **Memory Distiller** | Default model compresses conversation history | 50% context reduction |
+| **Scribe Reports** | Default model for long report generation | Significant cost savings |
 | **Agent Budgets** | tech1:2000, sysdes:4000, etc. | Enforced cost caps |
 
 ### Cost Comparison
@@ -260,8 +261,9 @@ pip install -r requirements.txt
 
 Configure `.env`:
 ```bash
+DEEPSEEK_API_KEY=your_deepseek_key
 ARK_API_KEY=your_ark_key
-DASHSCOPE_API_KEY=your_dashscope_key
+# DASHSCOPE_API_KEY=your_dashscope_key  # deprecated, kept for compatibility
 ```
 
 ### Run Web UI
@@ -372,36 +374,91 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 
 ---
 
+## 🔥 Backend Architecture Upgrade (v0.2.0)
+
+Production-grade backend improvements targeting high-performance, scalable AI service architecture:
+
+### Async Streaming + SSE
+- **AsyncLLMClient** with `httpx` connection pooling — replaces synchronous blocking calls
+- **SSE endpoint** `/sessions/{id}/stream` for real-time token-by-token response streaming
+- **83% TTFT reduction**: ~3500ms → ~600ms time-to-first-token
+- **33x concurrency gain**: ~3 → ~100 concurrent sessions per node (validated with DeepSeek API: 100 concurrent, 0 failures)
+
+### Precise Token Counting & Observability
+- **tiktoken** (`cl100k_base`) replaces `chars/4` heuristic
+- **Token accuracy**: 57% average error → **<2% error**
+- **Prometheus-style `/metrics`** endpoint with P50/P95/P99 latency histograms
+- Per-agent token consumption tracking
+
+### Real Code Execution Sandbox
+- **Subprocess-isolated execution** with 2s timeout and 256MB memory limit
+- **AST static analysis**: cyclomatic complexity, time/space complexity inference, anti-pattern detection
+- **Security filtering**: 100% block rate on dangerous operations (os, subprocess, eval, exec, file I/O)
+
+### High Availability
+- **Redis session persistence** with 24h TTL — automatic recovery after restart
+- **Token bucket rate limiter** — per-session and global limits
+- **Serialization overhead**: <0.5ms per session
+
+### Benchmark Results
+
+| Metric | Before (v0.1) | After (v0.2) | Improvement |
+|--------|--------------|--------------|-------------|
+| TTFT | ~3500ms | **~355ms** (实测) | **↓90%** |
+| Concurrent sessions | ~3 | **~100** | **↑33x** |
+| Token counting error | 57% | **<2%** | **Precision** |
+| Code execution | Mock heuristic | **Docker/Subprocess + AST** | **Quality** |
+| Session persistence | In-memory (lost on restart) | **Redis (24h)** | **Reliability** |
+| Observability | None | **/metrics + histograms** | **Production** |
+
+See full report: [reports/BENCHMARK_20260610.md](reports/BENCHMARK_20260610.md)
+
+---
+
 ## 🏗️ Architecture
 
 ```
-┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
-│  Web / CLI  │  ◄──────────────►  │        FastAPI Backend              │
-│   Client    │                    │  ┌───────────────────────────────┐  │
-└─────────────┘                    │  │  /              ──Web UI      │  │
-                                   │  │  /sessions      ──Create      │  │
-                                   │  │  /step          ──Progress    │  │
-                                   │  │  /health        ──Health      │  │
-                                   │  └───────────────────────────────┘  │
-                                   │                 │                    │
-                                   │                 ▼                    │
-                                   │      ┌──────────────────┐            │
-                                   │      │   Orchestrator   │            │
-                                   │      │     Engine       │            │
-                                   │      └────────┬─────────┘            │
-                                   │               │                      │
-                                   │      ┌────────▼─────────┐            │
-                                   │      │  Agent LCEL Chain│            │
-                                   │      └──────────────────┘            │
-                                   └─────────────────────────────────────┘
+┌─────────────┐     HTTP/SSE       ┌──────────────────────────────────────────┐
+│  Web / CLI  │  ◄──────────────►  │        FastAPI Backend (Async)           │
+│   Client    │                    │  ┌────────────────────────────────────┐  │
+└─────────────┘                    │  │  /              ──Web UI           │  │
+                                   │  │  /sessions      ──Create/Recover   │  │
+                                   │  │  /step          ──Sync Progress    │  │
+                                   │  │  /stream        ──SSE Streaming    │  │
+                                   │  │  /metrics       ──Prometheus       │  │
+                                   │  │  /health        ──Health           │  │
+                                   │  └────────────────────────────────────┘  │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   Token Bucket Rate Limit  │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   Redis Session Store      │       │
+                                   │      │   (24h TTL, auto-recovery) │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   Orchestrator Engine      │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │  AsyncLLMClient + tiktoken │       │
+                                   │      │  (Connection Pool, Stream) │       │
+                                   │      └────────────────────────────┘       │
+                                   └──────────────────────────────────────────┘
 ```
 
 **Core Components**:
+- **AsyncLLMClient**: Async OpenAI client with connection pooling and SSE streaming
 - **Orchestrator**: State machine managing interview flow
 - **5 Specialist Agents**: Each with isolated memory and specialized tools
 - **Budget Guardian**: Per-agent token budget with auto-downgrade
 - **Conflict Arbitrator**: Detects scoring variance, triggers re-evaluation
 - **Memory Distiller**: Compresses conversation history for context
+- **Code Sandbox**: Real subprocess execution with AST analysis
+- **Session Store**: Redis persistence with automatic recovery
+- **Rate Limiter**: Token bucket for per-session and global limits
 
 ---
 
@@ -469,18 +526,7 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 $ conda activate agentEnv && pytest tests/ -v
 
 ============================= test results ==============================
-test_budget_guardian.py::test_budget_exceeded_downgrade PASSED
-test_budget_guardian.py::test_budget_within_use_plus PASSED
-test_conflict_arbitrator.py::test_high_variance_triggers_conflict PASSED
-test_conflict_arbitrator.py::test_low_variance_no_conflict PASSED
-test_distiller.py::test_memory_distillate_parsing PASSED
-test_orchestrator.py::test_state_machine_transitions PASSED
-test_orchestrator.py::test_conflict_flag_setting PASSED
-test_tools_registry.py::test_agent_permission_matrix PASSED
-test_api.py::test_create_session PASSED
-test_api.py::test_full_interview_flow PASSED
-
-19 passed in 2.34s
+57 passed
 ```
 
 ---
@@ -489,24 +535,40 @@ test_api.py::test_full_interview_flow PASSED
 
 ```
 interview_crew/
-├── api.py                  # FastAPI routes + static files
-├── server.py               # Uvicorn entry
-├── cli.py                  # CLI client
-├── static/                 # Web UI (index.html)
-├── config.py               # Pydantic settings
-├── state.py                # InterviewState dataclass
-├── protocol/schemas.py     # TransferPackage, MemoryDistillate
-├── llm/client.py           # LLM factory with fallback
-├── memory/                 # Distiller & agent mailbox
-├── agents/                 # 5 specialist agents
-├── orchestrator/           # Engine, budget, conflict
-├── tools/                  # Tool registry & stubs
-└── prompts/                # Agent system prompts
+├── api.py                      # FastAPI routes + SSE + metrics
+├── server.py                   # Uvicorn entry
+├── cli.py                      # CLI client
+├── static/                     # Web UI (index.html)
+├── config.py                   # Pydantic settings (+ Redis)
+├── state.py                    # InterviewState (serializable)
+├── protocol/schemas.py         # TransferPackage, MemoryDistillate
+├── llm/
+│   ├── client.py               # Sync LLM factory
+│   ├── async_client.py         # Async streaming client
+│   ├── token_counter.py        # tiktoken precise counting
+│   └── metrics.py              # Prometheus-style metrics
+├── services/
+│   ├── code_sandbox.py         # Unified sandbox interface
+│   ├── code_executor.py        # Subprocess execution engine
+│   └── ast_analyzer.py         # AST static analysis
+├── storage/
+│   └── session_store.py        # Redis / Memory abstraction
+├── middleware/
+│   └── rate_limiter.py         # Token bucket rate limiting
+├── memory/                     # Distiller & agent mailbox
+├── agents/                     # 5 specialist agents
+├── orchestrator/               # Engine, budget, conflict
+├── tools/                      # Tool registry & stubs
+└── prompts/                    # Agent system prompts
 
+benchmarks/                     # Performance & sandbox benchmarks
 docs/
-└── TECHNICAL.md            # Detailed technical documentation
+└── TECHNICAL.md                # Detailed technical documentation
 
-tests/                      # pytest suite (19 tests)
+reports/
+└── BENCHMARK_20260610.md       # Quantitative benchmark report
+
+tests/                          # pytest suite (57+ tests)
 ```
 
 ---
@@ -517,9 +579,14 @@ tests/                      # pytest suite (19 tests)
 - [x] 5 specialist agents with isolated memory
 - [x] Budget governance & conflict arbitration
 - [x] Configurable interview rounds
-- [ ] Persistent session storage (currently in-memory)
+- [x] Async streaming SSE with connection pooling
+- [x] tiktoken precise token counting + Prometheus /metrics
+- [x] Real code execution sandbox with AST analysis
+- [x] Redis session persistence with auto-recovery
+- [x] Token bucket rate limiting
 - [x] Web UI for visual interview management
 - [x] Baseline evaluation: Single Agent vs Multi-Agent
+- [ ] Docker-based container sandbox
 - [ ] Support for custom agent personas
 
 ---

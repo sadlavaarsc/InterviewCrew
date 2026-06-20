@@ -15,7 +15,7 @@ from interview_crew.protocol.schemas import (
 )
 from interview_crew.llm.client import estimate_tokens, llm
 from interview_crew.memory.distiller import distill_memory
-from interview_crew.config import settings
+from interview_crew.llm.model_resolver import get_default_model, get_premium_model
 
 
 @dataclass
@@ -29,8 +29,8 @@ class StepResult:
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
     # Detailed breakdown by model tier
-    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
-    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    plus_token_consumed_this_turn: int = 0  # premium (quality) model
+    flash_token_consumed_this_turn: int = 0  # default (economy) model
     total_plus_token_consumed: int = 0
     total_flash_token_consumed: int = 0
 
@@ -69,8 +69,8 @@ class SingleAgentOrchestrator:
         self.token_consumed = 0
 
         # Detailed token tracking by model tier
-        self.total_plus_token_consumed = 0   # Full model (qwen3.5-plus)
-        self.total_flash_token_consumed = 0  # Downgrade model (qwen3.5-flash)
+        self.total_plus_token_consumed = 0   # premium (quality) model
+        self.total_flash_token_consumed = 0  # default (economy) model
         self.plus_call_count = 0
         self.flash_call_count = 0
 
@@ -158,8 +158,8 @@ Be thorough but concise."""
         # 6. Estimate tokens before call
         estimated_tokens = estimate_tokens(messages)
 
-        # 7. Call LLM (using full model - qwen-plus)
-        model_used = settings.qwen_plus_model
+        # 7. Call LLM (using premium model)
+        model_used = get_premium_model()
         try:
             response = llm.invoke(messages, model_name=model_used, temperature=0.7)
             self.llm_call_count += 1
@@ -167,8 +167,8 @@ Be thorough but concise."""
             self.token_consumed += estimated_tokens
             self.total_plus_token_consumed += estimated_tokens
         except Exception as e:
-            # Fallback to downgrade model on error
-            model_used = settings.qwen_flash_model
+            # Fallback to default model on error
+            model_used = get_default_model()
             try:
                 response = llm.invoke(messages, model_name=model_used, temperature=0.7)
                 self.llm_call_count += 1
@@ -198,8 +198,8 @@ Be thorough but concise."""
             report="",
             token_consumed_this_turn=estimated_tokens,
             total_token_consumed=self.token_consumed,
-            plus_token_consumed_this_turn=estimated_tokens if model_used == settings.qwen_plus_model else 0,
-            flash_token_consumed_this_turn=estimated_tokens if model_used == settings.qwen_flash_model else 0,
+            plus_token_consumed_this_turn=estimated_tokens if model_used == get_premium_model() else 0,
+            flash_token_consumed_this_turn=estimated_tokens if model_used == get_default_model() else 0,
             total_plus_token_consumed=self.total_plus_token_consumed,
             total_flash_token_consumed=self.total_flash_token_consumed
         )
@@ -253,7 +253,7 @@ Be thorough but concise."""
         return messages
 
     def _generate_final_report(self) -> str:
-        """Generate final interview report using downgrade model (flash)."""
+        """Generate final interview report using default (economy) model."""
         report_prompt = f"""Based on the following interview conversation, generate a brief evaluation report.
 
 Conversation:
@@ -274,10 +274,10 @@ Keep it brief (3-5 bullet points)."""
         try:
             report = llm.invoke(
                 [{"role": "user", "content": report_prompt}],
-                model_name=settings.qwen_flash_model,
+                model_name=get_default_model(),
                 temperature=0.5
             )
-            # Track flash model usage for report generation
+            # Track default model usage for report generation
             self.llm_call_count += 1
             self.flash_call_count += 1
             self.token_consumed += estimated_tokens

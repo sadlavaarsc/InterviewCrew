@@ -13,7 +13,7 @@ class Tech2Agent(BaseAgent):
     """
     name = "tech2"
     prompt_path = Path(__file__).parent.parent / "prompts" / "tech2.txt"
-    preferred_model = settings.qwen_plus_model
+    preferred_model = settings.premium_model
     default_temperature = 0.7
     has_sub_stages = True
 

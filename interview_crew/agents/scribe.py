@@ -8,7 +8,7 @@ from interview_crew.config import settings
 class ScribeAgent(BaseAgent):
     name = "scribe"
     prompt_path = Path(__file__).parent.parent / "prompts" / "scribe.txt"
-    preferred_model = settings.qwen_flash_model
+    preferred_model = settings.default_model
     default_temperature = 0.3
 
     def build_context(self, distillate: MemoryDistillate) -> str:

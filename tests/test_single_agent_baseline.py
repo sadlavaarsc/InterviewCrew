@@ -113,6 +113,9 @@ class TestSingleAgentOrchestrator:
         assert result2.report != ""  # Should have report
 
 
+from interview_crew.llm.model_resolver import get_premium_model
+
+
 class TestSingleInterviewAgent:
     """Test Single Interview Agent."""
 
@@ -121,7 +124,7 @@ class TestSingleInterviewAgent:
         agent = SingleInterviewAgent()
 
         assert agent.name == "single_interviewer"
-        assert agent.preferred_model == "qwen3.5-plus"
+        assert agent.preferred_model == get_premium_model()
 
     def test_build_context_with_empty_distillate(self):
         """Test build_context with empty distillate."""

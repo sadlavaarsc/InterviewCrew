@@ -7,7 +7,7 @@ from interview_crew.config import settings
 class SysDesAgent(BaseAgent):
     name = "sysdes"
     prompt_path = Path(__file__).parent.parent / "prompts" / "sysdes.txt"
-    preferred_model = settings.qwen_plus_model
+    preferred_model = settings.premium_model
     default_temperature = 0.7
 
     def build_context(self, distillate: MemoryDistillate) -> str:

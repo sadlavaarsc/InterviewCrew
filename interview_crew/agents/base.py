@@ -5,7 +5,8 @@ from typing import List, Optional, Dict, Any
 
 from langchain_core.runnables import RunnableLambda, RunnableSequence
 
-from interview_crew.llm.client import llm, estimate_tokens
+from interview_crew.llm.client import llm
+from interview_crew.llm.token_counter import estimate_tokens
 from interview_crew.memory.agent_mailbox import build_agent_messages
 from interview_crew.protocol.schemas import AgentOutput, MemoryDistillate, CodingProblem, ExecutionResult, TestResult
 from interview_crew.state import Message, InterviewState

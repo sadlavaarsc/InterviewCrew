@@ -2,44 +2,50 @@ from typing import Dict, Any, Callable
 from interview_crew.config import settings
 
 
+# Model tier aliases used across the system.
+# - premium: stronger reasoning, used for technical interviews
+# - default: cheaper / faster, used for report generation and downgrade paths
+_DEFAULT_TIER = settings.default_model
+_PREMIUM_TIER = settings.premium_model
+
 _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
     "tech1": {
-        "models": [settings.qwen_plus_model],
+        "models": [_PREMIUM_TIER],
         "tools": ["rag_query", "code_judge", "code_generator", "code_executor"],
         "max_calls_per_round": 3,
         "enable_search": False,
         "budget": settings.budget_tech1,
     },
     "tech2": {
-        "models": [settings.qwen_plus_model, settings.qwen_flash_model],
+        "models": [_PREMIUM_TIER, _DEFAULT_TIER],
         "tools": ["rag_query", "deep_search", "counter_example_gen", "stress_trigger", "code_generator", "code_executor", "web_fetch"],
         "max_calls_per_round": 4,
         "enable_search": True,
         "budget": settings.budget_tech2,
     },
     "sysdes": {
-        "models": [settings.qwen_plus_model, settings.qwen_flash_model],
+        "models": [_PREMIUM_TIER, _DEFAULT_TIER],
         "tools": ["whiteboard_sim", "tradeoff_analyzer", "cross_ref_checker"],
         "max_calls_per_round": 3,
         "enable_search": True,
         "budget": settings.budget_sysdes,
     },
     "leader": {
-        "models": [settings.qwen_plus_model],
+        "models": [_PREMIUM_TIER],
         "tools": ["consistency_checker", "project_analyzer", "web_fetch"],
         "max_calls_per_round": 2,
         "enable_search": False,
         "budget": settings.budget_leader,
     },
     "hr": {
-        "models": [settings.qwen_plus_model],
+        "models": [_PREMIUM_TIER],
         "tools": ["consistency_checker", "red_flag_detector"],
         "max_calls_per_round": 2,
         "enable_search": False,
         "budget": settings.budget_hr,
     },
     "scribe": {
-        "models": [settings.qwen_flash_model],
+        "models": [_DEFAULT_TIER],
         "tools": [],
         "max_calls_per_round": 0,
         "enable_search": False,
@@ -52,7 +58,7 @@ class ToolPolicy:
     def __init__(self, agent_type: str):
         self.agent_type = agent_type
         self.permissions = _TOOL_POLICIES.get(agent_type, {
-            "models": [settings.qwen_flash_model],
+            "models": [_DEFAULT_TIER],
             "tools": [],
             "max_calls_per_round": 0,
             "enable_search": False,
@@ -77,9 +83,9 @@ class ToolPolicy:
     def downgrade_model(self) -> str:
         """Return the cheapest allowed model for this agent."""
         models = self.permissions["models"]
-        if settings.qwen_flash_model in models:
-            return settings.qwen_flash_model
-        return models[-1] if models else settings.qwen_flash_model
+        if _DEFAULT_TIER in models:
+            return _DEFAULT_TIER
+        return models[-1] if models else _DEFAULT_TIER
 
 
 class ToolRegistry:

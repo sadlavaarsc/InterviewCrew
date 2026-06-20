@@ -1,4 +1,5 @@
 from interview_crew.config import settings
+from interview_crew.llm.model_resolver import get_default_model, get_premium_model
 
 
 class BudgetGuardian:
@@ -9,8 +10,8 @@ class BudgetGuardian:
         """Return the model name to use; downgrade if estimated tokens exceed budget."""
         budget = self._get_budget(agent_name)
         if estimated_tokens > budget:
-            return settings.qwen_flash_model
-        return settings.qwen_plus_model
+            return get_default_model()
+        return get_premium_model()
 
     def _get_budget(self, agent_name: str) -> int:
         budgets = {

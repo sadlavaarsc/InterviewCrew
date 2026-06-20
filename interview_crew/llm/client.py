@@ -1,7 +1,13 @@
 from typing import List, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
+
 from interview_crew.config import settings
+from interview_crew.llm.model_resolver import (
+    resolve_model_params,
+    get_default_model,
+    get_fallback_model,
+)
 
 
 def _build_lc_messages(messages: List[dict]) -> List[BaseMessage]:
@@ -25,40 +31,22 @@ def _extract_content(msg: BaseMessage) -> str:
 
 
 def estimate_tokens(messages: List[dict]) -> int:
-    """Cheap local heuristic: characters / 4."""
+    """Cheap local heuristic: characters / 4.
+
+    NOTE: This is the legacy estimator kept for API compatibility.
+    Use interview_crew.llm.token_counter for precise tiktoken counting.
+    """
     total = 0
     for m in messages:
         total += len(m.get("content", ""))
     return total // 4
 
 
-def _resolve_model_params(model_name: str) -> dict:
-    """Map model alias to API key / base_url / actual model name."""
-    if model_name == settings.qwen_flash_model:
-        return {
-            "model": settings.dashscope_model,
-            "api_key": settings.dashscope_api_key,
-            "base_url": settings.dashscope_base_url,
-        }
-    if model_name == settings.qwen_plus_model:
-        # If qwen-plus is also on dashscope, reuse same creds for now.
-        # Can be re-routed to ark or another provider later.
-        return {
-            "model": model_name,
-            "api_key": settings.dashscope_api_key,
-            "base_url": settings.dashscope_base_url,
-        }
-    # fallback to ark
-    return {
-        "model": settings.ark_model,
-        "api_key": settings.ark_api_key,
-        "base_url": settings.ark_base_url,
-    }
-
-
 class LLMClient:
+    """Synchronous LLM client with provider-agnostic model resolution."""
+
     def for_model(self, model_name: str, temperature: float = 0.7) -> ChatOpenAI:
-        params = _resolve_model_params(model_name)
+        params = resolve_model_params(model_name)
         return ChatOpenAI(
             model=params["model"],
             api_key=params["api_key"],
@@ -66,8 +54,14 @@ class LLMClient:
             temperature=temperature,
         )
 
-    def invoke(self, messages: List[dict], model_name: Optional[str] = None, temperature: float = 0.7) -> str:
-        model_name = model_name or settings.qwen_flash_model
+    def invoke(
+        self,
+        messages: List[dict],
+        model_name: Optional[str] = None,
+        temperature: float = 0.7,
+    ) -> str:
+        """Invoke LLM. Defaults to the configured economy-tier model."""
+        model_name = model_name or get_default_model()
         lc_messages = _build_lc_messages(messages)
         llm = self.for_model(model_name, temperature)
         resp = llm.invoke(lc_messages)

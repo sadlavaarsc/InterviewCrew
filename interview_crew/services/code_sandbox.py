@@ -1,128 +1,142 @@
 """
-Docker-based code execution sandbox for InterviewCrew.
-Provides secure, isolated code execution for coding interviews.
+Code execution sandbox for InterviewCrew.
+Supports real subprocess execution with AST analysis.
 """
 
-import json
-import tempfile
-import os
 import time
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from interview_crew.protocol.schemas import CodingProblem, TestCase
+from interview_crew.services.code_executor import execute_python, ExecutionResult
+from interview_crew.services.docker_executor import DockerCodeExecutor
+from interview_crew.services.ast_analyzer import analyze_code, ASTAnalysis
 
 
 @dataclass
-class TestResult:
-    """Result of a single test case execution."""
-    case_id: int
-    input_data: str
-    expected: str
-    actual: str
-    passed: bool
-    error_message: str = ""
-
-    def to_dict(self) -> Dict:
-        return asdict(self)
-
-
-@dataclass
-class ExecutionResult:
-    """Result of code execution with all test cases."""
+class SandboxResult:
+    """Unified result from code sandbox execution."""
     success: bool
     compile_output: str
-    test_results: List[TestResult]
+    test_results: List[Dict]
     overall_passed: bool
     execution_time_ms: float
     memory_usage_mb: float
+    ast_analysis: Dict
 
     def to_dict(self) -> Dict:
         return {
             "success": self.success,
             "compile_output": self.compile_output,
-            "test_results": [tr.to_dict() for tr in self.test_results],
+            "test_results": self.test_results,
             "overall_passed": self.overall_passed,
             "execution_time_ms": self.execution_time_ms,
             "memory_usage_mb": self.memory_usage_mb,
+            "ast_analysis": self.ast_analysis,
         }
 
 
 class CodeSandbox:
     """
-    Docker-based code execution sandbox.
-    For now, provides a mock implementation that simulates code execution.
-    Full Docker implementation can be enabled when Docker is available.
+    Production-ready code sandbox with real execution and AST analysis.
+    Supports subprocess and Docker execution modes.
     """
 
-    def __init__(self, use_docker: bool = False):
+    def __init__(self, use_real_execution: bool = True, use_docker: bool = False):
+        self.use_real_execution = use_real_execution
         self.use_docker = use_docker
         self.timeout = 2
         self.memory_limit = "256m"
+        self._docker_executor: Optional[DockerCodeExecutor] = None
+
+    def _get_docker_executor(self) -> DockerCodeExecutor:
+        if self._docker_executor is None:
+            self._docker_executor = DockerCodeExecutor(
+                timeout=self.timeout,
+                memory_limit=self.memory_limit,
+            )
+        return self._docker_executor
 
     def execute(
         self,
         code: str,
         test_cases: List,
         language: str = "python"
-    ) -> ExecutionResult:
+    ) -> SandboxResult:
         """
-        Execute code against test cases.
-
-        Args:
-            code: The code to execute
-            test_cases: List of test cases with "input" and "expected" keys
-            language: Programming language (currently only "python" supported)
-
-        Returns:
-            ExecutionResult with test results
+        Execute code against test cases with full analysis.
         """
-        if self.use_docker:
-            return self._execute_docker(code, test_cases, language)
-        else:
+        if not self.use_real_execution or language != "python":
             return self._execute_mock(code, test_cases, language)
 
-    def _execute_docker(
-        self,
-        code: str,
-        test_cases: List,
-        language: str
-    ) -> ExecutionResult:
-        """Execute code in Docker container (full implementation)."""
-        # TODO: Implement Docker-based execution when Docker is available
-        # For now, fall back to mock
-        return self._execute_mock(code, test_cases, language)
+        # Docker execution (preferred if available)
+        if self.use_docker:
+            try:
+                docker_result = self._get_docker_executor().execute(code, test_cases, language)
+                if not docker_result.error or "Docker not available" not in docker_result.error:
+                    return SandboxResult(
+                        success=docker_result.success,
+                        compile_output=docker_result.compile_output,
+                        test_results=docker_result.test_results,
+                        overall_passed=docker_result.overall_passed,
+                        execution_time_ms=docker_result.execution_time_ms,
+                        memory_usage_mb=docker_result.memory_usage_mb,
+                        ast_analysis=analyze_code(code).to_dict(),
+                    )
+            except Exception:
+                pass  # Fall through to subprocess
+
+        # Subprocess execution (fallback)
+        exec_result = execute_python(
+            code,
+            test_cases,
+            timeout=self.timeout,
+        )
+
+        # AST analysis
+        ast_result = analyze_code(code)
+
+        return SandboxResult(
+            success=exec_result.success,
+            compile_output=exec_result.compile_output,
+            test_results=[self._test_result_to_dict(tr) for tr in exec_result.test_results],
+            overall_passed=exec_result.overall_passed,
+            execution_time_ms=exec_result.execution_time_ms,
+            memory_usage_mb=exec_result.memory_usage_mb,
+            ast_analysis=ast_result.to_dict(),
+        )
+
+    def _test_result_to_dict(self, tr) -> Dict:
+        """Convert TestResult dataclass or dict to dict."""
+        if hasattr(tr, "to_dict"):
+            return tr.to_dict()
+        if hasattr(tr, "__dict__"):
+            return tr.__dict__
+        return dict(tr)
 
     def _execute_mock(
         self,
         code: str,
         test_cases: List,
         language: str
-    ) -> ExecutionResult:
-        """
-        Mock execution that simulates running code.
-        Uses a simple heuristic to check if code looks reasonable.
-        """
+    ) -> SandboxResult:
+        """Fallback mock execution."""
         start_time = time.time()
         test_results = []
         overall_passed = True
 
-        # Basic syntax check
         try:
             compile(code, '<string>', 'exec')
             compile_success = True
-            compile_output = "Syntax OK"
+            compile_output = "Syntax OK (mock mode)"
         except SyntaxError as e:
             compile_success = False
             compile_output = f"SyntaxError: {e}"
             overall_passed = False
 
         if compile_success:
-            # Simulate test execution
             for i, tc in enumerate(test_cases):
-                # Simple heuristic: if code contains function definition or class,
-                # assume it might work for basic cases
                 has_function = "def " in code or "class " in code
                 has_solution_logic = len(code.strip().split('\n')) > 3
 
@@ -130,47 +144,46 @@ class CodeSandbox:
                 expected = tc.get("expected", "") if isinstance(tc, dict) else getattr(tc, "expected", "")
 
                 if has_function and has_solution_logic:
-                    # Simulate 80% pass rate for reasonable-looking code
                     passed = True
                     actual = expected
                     error = ""
                 else:
                     passed = False
                     actual = ""
-                    error = "Code appears incomplete or missing function definition"
+                    error = "Code appears incomplete"
                     overall_passed = False
 
-                test_results.append(TestResult(
-                    case_id=i + 1,
-                    input_data=input_data,
-                    expected=expected,
-                    actual=actual,
-                    passed=passed,
-                    error_message=error
-                ))
+                test_results.append({
+                    "case_id": i + 1,
+                    "input_data": input_data,
+                    "expected": expected,
+                    "actual": actual,
+                    "passed": passed,
+                    "error_message": error,
+                })
         else:
-            # Compilation failed, all tests fail
             for i, tc in enumerate(test_cases):
                 input_data = tc.get("input", "") if isinstance(tc, dict) else getattr(tc, "input", "")
                 expected = tc.get("expected", "") if isinstance(tc, dict) else getattr(tc, "expected", "")
-                test_results.append(TestResult(
-                    case_id=i + 1,
-                    input_data=input_data,
-                    expected=expected,
-                    actual="",
-                    passed=False,
-                    error_message="Compilation failed"
-                ))
+                test_results.append({
+                    "case_id": i + 1,
+                    "input_data": input_data,
+                    "expected": expected,
+                    "actual": "",
+                    "passed": False,
+                    "error_message": "Compilation failed",
+                })
 
         execution_time = (time.time() - start_time) * 1000
 
-        return ExecutionResult(
+        return SandboxResult(
             success=compile_success,
             compile_output=compile_output,
             test_results=test_results,
             overall_passed=overall_passed,
             execution_time_ms=execution_time,
-            memory_usage_mb=10.0  # Mock value
+            memory_usage_mb=10.0,
+            ast_analysis=analyze_code(code).to_dict(),
         )
 
     def generate_problem(
@@ -179,13 +192,9 @@ class CodeSandbox:
         difficulty: str,
         resume_context: str = ""
     ) -> CodingProblem:
-        """
-        Generate a coding problem based on tech stack and difficulty.
-        Uses a built-in problem bank.
-        """
+        """Generate a coding problem from built-in bank."""
         problems = self._get_problem_bank()
 
-        # Select appropriate problems based on difficulty
         if difficulty == "easy":
             pool = problems["easy"]
         elif difficulty == "medium":
@@ -193,7 +202,6 @@ class CodeSandbox:
         else:
             pool = problems["easy"] + problems["medium"]
 
-        # Simple selection (could be smarter based on tech_stack)
         import random
         problem_template = random.choice(pool)
 
@@ -276,5 +284,5 @@ class CodeSandbox:
         }
 
 
-# Global singleton instance
-code_sandbox = CodeSandbox(use_docker=False)
+# Global singleton — auto-detect Docker availability
+code_sandbox = CodeSandbox(use_real_execution=True, use_docker=True)

@@ -25,3 +25,5 @@ venv/
 .mypy_cache/
 .ruff_cache/
 claude.md
+INTERNAL_*.md
+*.log

@@ -12,7 +12,8 @@ from interview_crew.protocol.schemas import (
     InterviewRoundConfig,
 )
 from interview_crew.memory.distiller import distill_memory
-from interview_crew.llm.client import estimate_tokens
+from interview_crew.llm.token_counter import estimate_tokens
+from interview_crew.llm.model_resolver import get_default_model, get_premium_model
 from interview_crew.agents import Tech1Agent, Tech2Agent, SysDesAgent, LeaderAgent, HRAgent, ScribeAgent
 from interview_crew.orchestrator.budget_guardian import BudgetGuardian
 from interview_crew.orchestrator.conflict_arbitrator import ConflictArbitrator
@@ -35,8 +36,8 @@ class StepResult:
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
     # Detailed breakdown by model tier
-    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
-    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    plus_token_consumed_this_turn: int = 0  # premium/quality model
+    flash_token_consumed_this_turn: int = 0  # default/economy model
     total_plus_token_consumed: int = 0
     total_flash_token_consumed: int = 0
 
@@ -109,23 +110,21 @@ class Orchestrator:
         model_used: str = "",
     ) -> StepResult:
         """Build StepResult with proper token statistics."""
-        from interview_crew.config import settings
-
-        # Determine if plus or flash model was used
-        is_plus = model_used == settings.qwen_plus_model or (not model_used and not hasattr(settings, 'qwen_flash_model'))
-        is_flash = model_used == settings.qwen_flash_model
+        # Determine if premium or default model was used
+        is_premium = model_used == get_premium_model()
+        is_default = model_used == get_default_model()
 
         # Calculate this turn's token breakdown
-        plus_this_turn = estimated_tokens if is_plus else 0
-        flash_this_turn = estimated_tokens if is_flash else 0
+        premium_this_turn = estimated_tokens if is_premium else 0
+        default_this_turn = estimated_tokens if is_default else 0
 
         # Update cumulative counters
-        if is_plus:
+        if is_premium:
             self._total_plus_token_consumed += estimated_tokens
-        elif is_flash:
+        elif is_default:
             self._total_flash_token_consumed += estimated_tokens
         else:
-            # Default to plus if unknown
+            # Default to premium if unknown
             self._total_plus_token_consumed += estimated_tokens
 
         # Persist to state for session recovery
@@ -143,8 +142,8 @@ class Orchestrator:
             report=report,
             token_consumed_this_turn=total_this_turn,
             total_token_consumed=total_consumed,
-            plus_token_consumed_this_turn=plus_this_turn,
-            flash_token_consumed_this_turn=flash_this_turn,
+            plus_token_consumed_this_turn=premium_this_turn,
+            flash_token_consumed_this_turn=default_this_turn,
             total_plus_token_consumed=self._total_plus_token_consumed,
             total_flash_token_consumed=self._total_flash_token_consumed,
         )
@@ -758,8 +757,6 @@ class Orchestrator:
         Returns:
             tuple: (report_text, estimated_tokens, model_used)
         """
-        from interview_crew.config import settings
-
         if not self.state.transfer_queue:
             return "暂无面评数据。", 0, ""
 
@@ -800,8 +797,8 @@ class Orchestrator:
             resume_context=self.state.resume_text,
         )
 
-        # Scribe uses flash model
-        model_used = settings.qwen_flash_model
+        # Scribe uses default (economy) model
+        model_used = get_default_model()
 
         output = scribe.invoke(
             synthetic_distillate,

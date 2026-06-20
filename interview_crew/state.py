@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Any
 from interview_crew.protocol.schemas import TransferPackage, BusinessContext, CodingProblem, InterviewConfig
 
@@ -46,8 +47,8 @@ class InterviewState:
     total_budget_consumed: int = 0
 
     # Token tracking for comparison testing (new)
-    total_plus_token_consumed: int = 0  # Full model (qwen-plus)
-    total_flash_token_consumed: int = 0  # Downgrade model (qwen-flash)
+    total_plus_token_consumed: int = 0  # premium/quality model
+    total_flash_token_consumed: int = 0  # default/economy model
 
     # Persistent round tracking for orchestrator session recovery
     round_turn_counts: Dict[str, int] = field(default_factory=dict)
@@ -136,3 +137,39 @@ class InterviewState:
         """Reset sub-stage to initial state for an agent."""
         self.set_sub_stage(agent, "chat")
         setattr(self, f"{agent}_stage_turns", 0)
+
+    # ========== Serialization ==========
+
+    def to_json(self) -> str:
+        """Serialize state to JSON string for persistence."""
+        data = asdict(self)
+        # Handle Pydantic models
+        if self.config:
+            data["config"] = self.config.model_dump(mode="json")
+        if self.business_context:
+            data["business_context"] = self.business_context.model_dump(mode="json")
+        data["transfer_queue"] = [
+            pkg.model_dump(mode="json") for pkg in self.transfer_queue
+        ]
+        if self.current_coding_task and hasattr(self.current_coding_task, "model_dump"):
+            data["current_coding_task"] = self.current_coding_task.model_dump(mode="json")
+        return json.dumps(data, ensure_ascii=False, default=str)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "InterviewState":
+        """Deserialize state from JSON string."""
+        data = json.loads(json_str)
+
+        # Reconstruct Pydantic models
+        if "config" in data and data["config"]:
+            data["config"] = InterviewConfig.model_validate(data["config"])
+        if "business_context" in data and data["business_context"]:
+            data["business_context"] = BusinessContext.model_validate(data["business_context"])
+        if "transfer_queue" in data and data["transfer_queue"]:
+            data["transfer_queue"] = [
+                TransferPackage.model_validate(pkg) for pkg in data["transfer_queue"]
+            ]
+        if "current_coding_task" in data and data["current_coding_task"]:
+            data["current_coding_task"] = data["current_coding_task"]
+
+        return cls(**data)

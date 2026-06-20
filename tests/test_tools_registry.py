@@ -1,4 +1,5 @@
 from interview_crew.tools.registry import ToolPolicy
+from interview_crew.llm.model_resolver import get_default_model
 
 
 def test_tech1_permissions():
@@ -29,4 +30,4 @@ def test_max_calls_enforced():
 
 def test_downgrade_model():
     policy = ToolPolicy("scribe")
-    assert policy.downgrade_model() == "qwen3.5-flash"
+    assert policy.downgrade_model() == get_default_model()

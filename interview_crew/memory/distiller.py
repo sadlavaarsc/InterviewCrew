@@ -3,7 +3,7 @@ from typing import List
 from interview_crew.state import Message
 from interview_crew.protocol.schemas import MemoryDistillate, CompetencyTag
 from interview_crew.llm.client import llm, estimate_tokens
-from interview_crew.config import settings
+from interview_crew.llm.model_resolver import get_default_model
 
 
 _DISTILL_PROMPT = """
@@ -49,7 +49,7 @@ def distill_memory(raw_dialogue: List[Message], session_id: str, turn: int) -> M
     ]
 
     try:
-        raw = llm.invoke(messages, model_name=settings.qwen_flash_model, temperature=0.3)
+        raw = llm.invoke(messages, model_name=get_default_model(), temperature=0.3)
         data = json.loads(raw.strip())
         return MemoryDistillate(**data)
     except Exception as e:

@@ -28,8 +28,9 @@ conda activate agentEnv && pip install <package>
 conda activate agentEnv && pip install -r requirements.txt
 
 # 2. 配置环境变量（.env）
-ARK_API_KEY=xxx
-DASHSCOPE_API_KEY=xxx
+DEEPSEEK_API_KEY=xxx          # 默认主模型（deepseek-v4-flash / deepseek-v4-pro）
+ARK_API_KEY=xxx               # 故障转移 fallback
+# DASHSCOPE_API_KEY=xxx       # 已废弃，仅保留兼容
 
 # 3. 启动后端
 conda activate agentEnv && python -m interview_crew.server
@@ -47,13 +48,18 @@ conda activate agentEnv && python -m interview_crew.cli --turns 6 --resume data/
 
 ```
 interview_crew/        # 核心代码
-├── agents/            # 5 位面试官 (tech1/tech2/sysdes/hr/scribe)
-├── orchestrator/      # 编排器 + 预算控制 + 冲突仲裁
+├── agents/            # 5 位面试官 (tech1/tech2/sysdes/leader/hr/scribe)
+├── orchestrator/      # 编排器 + 预算控制 + 冲突仲裁 + 配额
 ├── memory/            # 记忆蒸馏 + 邮箱隔离
-├── tools/             # 工具注册
+├── llm/               # 通用 OpenAI 兼容 LLM 客户端 + 模型解析 + tiktoken + 指标
+├── services/          # 代码沙箱 / AST 分析 / 代码执行
+├── middleware/        # Token Bucket 限流
+├── storage/           # Redis / 内存 会话持久化
+├── tools/             # 工具注册与 Stub 实现
 ├── prompts/           # 系统提示词
 └── static/            # Web UI (index.html)
 
+benchmarks/            # 性能 / 沙箱 / 延迟 benchmark
 reports/               # 审计报告、测试反馈、扩展计划
 data/                  # 测试记录、样本数据
 docs/TECHNICAL.md      # 详细技术文档
@@ -84,7 +90,8 @@ curl http://localhost:8000/sessions/{session_id}
 2. **服务依赖**：CLI 和 Web UI 都是后端 API 的客户端，必须先启动后端 (`python -m interview_crew.server`)
 3. **Web UI**：`http://localhost:8000/` 提供可视化面试界面，支持轮次配置、代码考核、实时统计
 4. **测试数据**：样本简历/JD 存放在 `data/samples/`，测试记录保存在 `data/records/`
-5. **模型配置**：支持 Ark + DashScope 双模型自动 fallback
+5. **模型配置**：默认 DeepSeek 主模型，Ark 作为 fallback；Qwen/DashScope 已标记为废弃，旧 `.env` 仍可兼容运行但会触发 `DeprecationWarning`
+6. **模型分级**：代码中统一使用 `default_model`（经济型） / `premium_model`（高质量） / `fallback_model` 别名，避免绑定具体厂商
 
 ---
 
@@ -96,4 +103,4 @@ curl http://localhost:8000/sessions/{session_id}
 
 ---
 
-*最后更新: 2026-04-08*
+*最后更新: 2026-06-21*

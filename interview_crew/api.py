@@ -1,25 +1,38 @@
+import json
 import uuid
+import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional, Literal, Union
+from typing import Dict, List, Optional, Literal, Union, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from interview_crew.state import InterviewState
 from interview_crew.orchestrator.engine import Orchestrator, StepResult
 from interview_crew.baseline.single_agent_orchestrator import SingleAgentOrchestrator
 from interview_crew.services.code_sandbox import code_sandbox
 from interview_crew.protocol.schemas import InterviewConfig, InterviewRoundConfig, StageTurnLimit
+from interview_crew.llm.metrics import (
+    get_metrics_text,
+    get_metrics_content_type,
+    set_active_sessions,
+    record_turn,
+)
+from interview_crew.storage.session_store import get_session_store
+from interview_crew.middleware.rate_limiter import RateLimitMiddleware
 
 # Type alias for orchestrator
 OrchestratorType = Union[Orchestrator, SingleAgentOrchestrator]
 
-app = FastAPI(title="InterviewCrew API", version="0.1.0")
+app = FastAPI(title="InterviewCrew API", version="0.2.0")
+app.add_middleware(RateLimitMiddleware)
 
-# In-memory session storage
+# In-memory session storage (orchestrator cache)
 _sessions: Dict[str, OrchestratorType] = {}
+_session_store = get_session_store()
 
 
 class StageLimitInput(BaseModel):
@@ -139,8 +152,8 @@ class StepResponse(BaseModel):
     token_consumed_this_turn: int = 0
     total_token_consumed: int = 0
     # Detailed breakdown by model tier
-    plus_token_consumed_this_turn: int = 0  # Full model (qwen-plus)
-    flash_token_consumed_this_turn: int = 0  # Downgrade model (qwen-flash)
+    plus_token_consumed_this_turn: int = 0  # premium/quality model
+    flash_token_consumed_this_turn: int = 0  # default/economy model
     total_plus_token_consumed: int = 0
     total_flash_token_consumed: int = 0
 
@@ -194,6 +207,7 @@ class SubmitCodeResponse(BaseModel):
     execution_time_ms: float
     next_question: str
     current_sub_stage: str = ""
+    ast_analysis: dict = Field(default_factory=dict, description="AST static analysis results")
 
 
 class CodingTaskResponse(BaseModel):
@@ -323,6 +337,11 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         orchestrator = Orchestrator(state)
 
     _sessions[session_id] = orchestrator
+    # Save to persistent store
+    try:
+        _session_store.save(session_id, state.to_json())
+    except Exception:
+        pass
     return CreateSessionResponse(session_id=session_id, status=state.status, mode=req.mode)
 
 
@@ -332,6 +351,12 @@ def step(session_id: str, req: StepRequest) -> StepResponse:
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
     result: StepResult = orchestrator.step(req.candidate_response)
+    record_turn(result.agent)
+    # Persist session state
+    try:
+        _session_store.save(session_id, orchestrator.state.to_json())
+    except Exception:
+        pass
     return StepResponse(
         agent=result.agent,
         question=result.question,
@@ -345,6 +370,63 @@ def step(session_id: str, req: StepRequest) -> StepResponse:
         total_plus_token_consumed=result.total_plus_token_consumed,
         total_flash_token_consumed=result.total_flash_token_consumed,
     )
+
+
+async def _stream_step_internal(session_id: str, candidate_response: str):
+    """Internal stream logic shared by GET (SSE) and POST endpoints."""
+    orchestrator = _sessions.get(session_id)
+    if orchestrator is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    async def event_generator():
+        result: StepResult = orchestrator.step(candidate_response)
+        record_turn(result.agent)
+
+        # Persist state
+        try:
+            _session_store.save(session_id, orchestrator.state.to_json())
+        except Exception:
+            pass
+
+        text = result.question
+        chunk_size = 2
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
+            yield {
+                "event": "token",
+                "data": json.dumps({
+                    "token": chunk,
+                    "agent": result.agent,
+                    "finished": result.finished,
+                })
+            }
+            await asyncio.sleep(0.015)
+
+        yield {
+            "event": "done",
+            "data": json.dumps({
+                "agent": result.agent,
+                "question": result.question,
+                "finished": result.finished,
+                "report": result.report,
+                "token_consumed_this_turn": result.token_consumed_this_turn,
+                "total_token_consumed": result.total_token_consumed,
+            })
+        }
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post("/sessions/{session_id}/stream")
+async def stream_step_post(session_id: str, req: StepRequest):
+    """Stream interview turn response via SSE (POST)."""
+    return await _stream_step_internal(session_id, req.candidate_response)
+
+
+@app.get("/sessions/{session_id}/stream")
+async def stream_step_get(session_id: str, candidate_response: str = ""):
+    """Stream interview turn response via SSE (GET for EventSource compatibility)."""
+    return await _stream_step_internal(session_id, candidate_response)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionStateResponse)
@@ -476,21 +558,23 @@ def submit_code(session_id: str, req: SubmitCodeRequest) -> SubmitCodeResponse:
         return SubmitCodeResponse(
             compile_success=result.success,
             compile_output=result.compile_output,
-            test_results=[TestResult(**t.__dict__) for t in result.test_results],
+            test_results=[TestResult(**t) for t in result.test_results],
             overall_passed=result.overall_passed,
             execution_time_ms=result.execution_time_ms,
             next_question=follow_up + "\n\n" + reflect_output.question,
             current_sub_stage=new_sub_stage,
+            ast_analysis=result.ast_analysis,
         )
 
     return SubmitCodeResponse(
         compile_success=result.success,
         compile_output=result.compile_output,
-        test_results=[TestResult(**t.__dict__) for t in result.test_results],
+        test_results=[TestResult(**t) for t in result.test_results],
         overall_passed=result.overall_passed,
         execution_time_ms=result.execution_time_ms,
         next_question=follow_up,
         current_sub_stage=orchestrator.state.get_sub_stage(agent_name),
+        ast_analysis=result.ast_analysis,
     )
 
 
@@ -529,7 +613,23 @@ def get_coding_task(session_id: str) -> CodingTaskResponse:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "sessions": len(_sessions)}
+    set_active_sessions(len(_sessions))
+    return {
+        "status": "ok",
+        "sessions": len(_sessions),
+        "version": "0.2.0",
+        "features": ["async_streaming", "tiktoken", "metrics", "rate_limiting", "session_persistence"],
+    }
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus-style metrics endpoint."""
+    set_active_sessions(len(_sessions))
+    return Response(
+        content=get_metrics_text(),
+        media_type=get_metrics_content_type(),
+    )
 
 
 # Mount static files for the web frontend
@@ -540,3 +640,31 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 @app.get("/")
 def root() -> FileResponse:
     return FileResponse(str(static_dir / "index.html"))
+
+
+# ===== Startup: recover active sessions from persistent store =====
+
+@app.on_event("startup")
+def startup_event():
+    """Recover active sessions from persistent store on startup."""
+    try:
+        active_ids = _session_store.list_active()
+        recovered = 0
+        for sid in active_ids:
+            try:
+                data = _session_store.load(sid)
+                if data:
+                    state = InterviewState.from_json(data)
+                    if state.status == "ongoing":
+                        if hasattr(state, "mode") and state.mode == "single_agent":
+                            orch = SingleAgentOrchestrator(state)
+                        else:
+                            orch = Orchestrator(state)
+                        _sessions[sid] = orch
+                        recovered += 1
+            except Exception:
+                continue
+        if recovered > 0:
+            print(f"[Startup] Recovered {recovered} active sessions from store")
+    except Exception as e:
+        print(f"[Startup] Session recovery skipped: {e}")

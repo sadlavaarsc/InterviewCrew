@@ -12,7 +12,7 @@ class LeaderAgent(BaseAgent):
     """
     name = "leader"
     prompt_path = Path(__file__).parent.parent / "prompts" / "leader.txt"
-    preferred_model = settings.qwen_plus_model
+    preferred_model = settings.premium_model
     default_temperature = 0.5
 
     def build_context(self, distillate: MemoryDistillate) -> str:

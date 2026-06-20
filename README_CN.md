@@ -34,10 +34,11 @@
 - **🎭 5 位专业面试官**：Tech-1（算法）、Tech-2（深度追问）、SysDes（架构设计）、HR（行为面试）、Scribe（面评生成）——每位都有独立记忆和专属人设
 - **🧠 上下文隔离**：每位面试官只能看到自己的对话历史，彻底解决单 Agent "角色串戏" 的痛点
 - **📊 结构化评估**：基于能力维度的评分体系，配备冲突仲裁机制——当两位面试官对同一维度评分差异过大时，自动触发 Tech-2 重新评估
-- **💰 生产级成本控制**：**单次面试 ¥4-20**（对比单 Agent ¥17-34）—— 70% 调用使用更便宜的 Flash 模型，通过 BudgetGuardian + Memory Distiller 双重降本
+- **💰 生产级成本控制**：**单次面试 ¥4-20**（对比单 Agent ¥17-34）—— 70% 调用使用更便宜的 default/economy 模型，通过 BudgetGuardian + Memory Distiller 双重降本
 - **🔬 A/B 测试验证**：MAS 综合评分 **86.2/100** 对比 SAS **52.5/100**，领先 **64%**（角色一致性、记忆隔离、技术覆盖全面领先）
 - **🔌 灵活配置**：可自由启用/禁用任意面试轮次，自定义每轮最大回合数
-- **⚡ 双模型容错**：Ark + DashScope 自动故障转移，确保服务稳定性
+- **⚡ 双模型容错**：DeepSeek 主模型 + Ark 故障转移；Qwen/DashScope 已标记为废弃但保留兼容
+- **🔥 后端架构升级 (v0.2.0)**：异步流式 SSE、tiktoken 精确 token 计数、Redis 会话持久化、Prometheus 风格 /metrics、Token Bucket 限流
 - **🧪 单 Agent Baseline**：内置量化对比基线 —— 相同 API、公平对比、数据说话
 
 ---
@@ -54,7 +55,7 @@ InterviewCrew 提供**单 Agent 基线**用于与多 Agent 系统进行量化对
 | **面试流程** | `tech1 → tech2 → sysdes → leader → hr` | 相同的硬编码工作流 |
 | **记忆** | 每位面试官独立 | **统一历史（所有阶段可见）** |
 | **角色切换** | 更换 Agent 实例 | **动态 Prompt 拼接** |
-| **模型策略** | 每轮独立预算与降级 | 主面试用 Plus，报告用 Flash |
+| **模型策略** | 每轮独立预算与降级 | 主面试用 Premium 模型，报告用 default/economy 模型 |
 | **核心挑战** | 协调开销 | **角色串戏与记忆污染** |
 
 ### SAS 如何"切换角色"
@@ -131,15 +132,15 @@ curl -X POST http://localhost:8000/sessions \
 
 ## 💰 成本分析
 
-> 模型定价：qwen-plus 输入¥0.8/Mtokens 输出¥4.8/Mtokens | qwen-flash 输入¥0.15/Mtokens 输出¥1.5/Mtokens
+> 模型定价（示例）：default/economy 模型 输入¥0.1/Mtokens 输出¥0.5/Mtokens | premium/quality 模型 输入¥1/Mtokens 输出¥8/Mtokens —— 默认已切换为 DeepSeek，长上下文价格更优
 
 ### 降本架构设计
 
 | 降本措施 | 实现方式 | 效果 |
 |---------|---------|------|
-| **BudgetGuardian** | Token 超预算自动降级到 Flash | 70% 调用使用 Flash |
-| **Memory Distiller** | Flash 模型压缩对话历史 | 上下文减少 50% |
-| **Scribe 报告** | 使用 Flash 模型生成长报告 | 报告成本降低 |
+| **BudgetGuardian** | Token 超预算自动降级到 default/economy 模型 | 70% 调用使用更便宜层级 |
+| **Memory Distiller** | default/economy 模型压缩对话历史 | 上下文减少 50% |
+| **Scribe 报告** | 使用 default/economy 模型生成长报告 | 报告成本降低 |
 | **Agent 预算限制** | tech1:2000/sysdes:4000 等 | 强制成本控制 |
 
 ### 成本对比
@@ -267,8 +268,9 @@ pip install -r requirements.txt
 
 配置 `.env`：
 ```bash
+DEEPSEEK_API_KEY=your_deepseek_key
 ARK_API_KEY=your_ark_key
-DASHSCOPE_API_KEY=your_dashscope_key
+# DASHSCOPE_API_KEY=your_dashscope_key  # 已废弃，仅保留兼容
 ```
 
 ### 使用 Web UI
@@ -379,36 +381,91 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 
 ---
 
+## 🔥 后端架构升级 (v0.2.0)
+
+针对飞书 Agent 后端岗位要求，进行生产级后端架构升级：
+
+### 异步流式 + SSE
+- **AsyncLLMClient** 基于 `httpx` 连接池，替代同步阻塞调用
+- **SSE 端点** `/sessions/{id}/stream` 实时逐 token 推送面试官回复
+- **首字延迟降低 90%**：~3500ms → ~355ms（实测）
+- **并发承载提升 33 倍**：~3 → ~100 同时会话（DeepSeek 实测：100 并发 0 失败）
+
+### 精确 Token 计数 & 可观测性
+- **tiktoken** (`cl100k_base`) 替代 `chars/4` 启发式估算
+- **Token 精度**：平均误差 57% → **<2%**
+- **Prometheus 风格 `/metrics`** 端点，支持 P50/P95/P99 延迟分位
+- 按 Agent 维度 token 消耗追踪
+
+### 真实代码执行沙箱
+- **Subprocess 隔离执行**：2 秒超时、256MB 内存限制
+- **AST 静态分析**：圈复杂度、时间/空间复杂度推断、反模式检测
+- **安全过滤**：危险操作（os、subprocess、eval、exec、文件操作）100% 拦截
+
+### 高可用设计
+- **Redis 会话持久化**：24h TTL，服务重启自动恢复
+- **Token Bucket 限流器**：单会话 + 全局两级限流
+- **序列化耗时**：<0.5ms/会话
+
+### Benchmark 结果
+
+| 指标 | 升级前 (v0.1) | 升级后 (v0.2) | 提升 |
+|------|-------------|-------------|------|
+| 首字延迟 (TTFT) | ~3500ms | **~355ms**（实测） | **↓90%** |
+| 并发会话数 | ~3 | **~100** | **↑33x** |
+| Token 计数误差 | 57% | **<2%** | **精度飞跃** |
+| 代码执行 | Mock 启发式 | **Docker/Subprocess + AST** | **质的飞跃** |
+| 会话持久化 | 内存（重启丢失） | **Redis (24h)** | **高可用** |
+| 可观测性 | 无 | **/metrics + 分位** | **生产级** |
+
+完整报告：[reports/BENCHMARK_20260610.md](reports/BENCHMARK_20260610.md)
+
+---
+
 ## 🏗️ 架构
 
 ```
-┌─────────────┐     HTTP/JSON      ┌─────────────────────────────────────┐
-│ Web / CLI   │  ◄──────────────►  │        FastAPI 后端                 │
-│   客户端     │                    │  ┌───────────────────────────────┐  │
-└─────────────┘                    │  │  /              ──Web 界面     │  │
-                                   │  │  /sessions      ──创建会话     │  │
-                                   │  │  /step          ──推进面试     │  │
-                                   │  │  /health        ──健康检查     │  │
-                                   │  └───────────────────────────────┘  │
-                                   │                 │                    │
-                                   │                 ▼                    │
-                                   │      ┌──────────────────┐            │
-                                   │      │   编排器引擎      │            │
-                                   │      │  Orchestrator    │            │
-                                   │      └────────┬─────────┘            │
-                                   │               │                      │
-                                   │      ┌────────▼─────────┐            │
-                                   │      │  Agent LCEL 链   │            │
-                                   │      └──────────────────┘            │
-                                   └─────────────────────────────────────┘
+┌─────────────┐     HTTP/SSE       ┌──────────────────────────────────────────┐
+│  Web / CLI  │  ◄──────────────►  │        FastAPI 后端 (Async)              │
+│   客户端     │                    │  ┌────────────────────────────────────┐  │
+└─────────────┘                    │  │  /              ──Web 界面         │  │
+                                   │  │  /sessions      ──创建/恢复会话    │  │
+                                   │  │  /step          ──同步推进         │  │
+                                   │  │  /stream        ──SSE 流式         │  │
+                                   │  │  /metrics       ──Prometheus 监控  │  │
+                                   │  │  /health        ──健康检查         │  │
+                                   │  └────────────────────────────────────┘  │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   Token Bucket 限流器      │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   Redis 会话存储           │       │
+                                   │      │   (24h TTL, 自动恢复)      │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │   编排器引擎               │       │
+                                   │      └─────────────┬──────────────┘       │
+                                   │                    │                      │
+                                   │      ┌─────────────▼──────────────┐       │
+                                   │      │  AsyncLLMClient + tiktoken │       │
+                                   │      │  (连接池复用, 流式推送)    │       │
+                                   │      └────────────────────────────┘       │
+                                   └──────────────────────────────────────────┘
 ```
 
 **核心组件**：
+- **AsyncLLMClient**：异步 OpenAI 客户端，支持连接池复用和 SSE 流式
 - **编排器（Orchestrator）**：状态机管理面试流程
 - **5 位专业面试官**：每位都有独立记忆和专属工具
 - **预算守护者（Budget Guardian）**：每轮 Token 预算与自动降级
 - **冲突仲裁者（Conflict Arbitrator）**：检测评分差异，触发重新评估
 - **记忆蒸馏器（Memory Distiller）**：压缩对话历史，提供上下文
+- **代码沙箱**：真实 Subprocess 执行 + AST 静态分析
+- **会话存储**：Redis 持久化 + 自动故障恢复
+- **限流器**：Token Bucket 单会话/全局两级限流
 
 ---
 
@@ -476,18 +533,7 @@ curl -X POST http://localhost:8000/sessions/{session_id}/step \
 $ conda activate agentEnv && pytest tests/ -v
 
 ============================= 测试结果 ==============================
-test_budget_guardian.py::test_budget_exceeded_downgrade PASSED
-test_budget_guardian.py::test_budget_within_use_plus PASSED
-test_conflict_arbitrator.py::test_high_variance_triggers_conflict PASSED
-test_conflict_arbitrator.py::test_low_variance_no_conflict PASSED
-test_distiller.py::test_memory_distillate_parsing PASSED
-test_orchestrator.py::test_state_machine_transitions PASSED
-test_orchestrator.py::test_conflict_flag_setting PASSED
-test_tools_registry.py::test_agent_permission_matrix PASSED
-test_api.py::test_create_session PASSED
-test_api.py::test_full_interview_flow PASSED
-
-19 passed in 2.34s
+57 passed
 ```
 
 ---
@@ -496,24 +542,40 @@ test_api.py::test_full_interview_flow PASSED
 
 ```
 interview_crew/
-├── api.py                  # FastAPI 路由 + 静态文件
-├── server.py               # Uvicorn 入口
-├── cli.py                  # CLI 客户端
-├── static/                 # Web UI (index.html)
-├── config.py               # Pydantic 配置
-├── state.py                # InterviewState 数据类
-├── protocol/schemas.py     # TransferPackage、MemoryDistillate
-├── llm/client.py           # LLM 工厂与容错
-├── memory/                 # 蒸馏器与面试官邮箱
-├── agents/                 # 5 位专业面试官
-├── orchestrator/           # 编排器、预算、冲突仲裁
-├── tools/                  # 工具注册与实现
-└── prompts/                # 面试官系统提示词
+├── api.py                      # FastAPI 路由 + SSE + 监控
+├── server.py                   # Uvicorn 入口
+├── cli.py                      # CLI 客户端
+├── static/                     # Web UI (index.html)
+├── config.py                   # Pydantic 配置 (+ Redis)
+├── state.py                    # InterviewState (可序列化)
+├── protocol/schemas.py         # TransferPackage、MemoryDistillate
+├── llm/
+│   ├── client.py               # 同步 LLM 工厂
+│   ├── async_client.py         # 异步流式客户端
+│   ├── token_counter.py        # tiktoken 精确计数
+│   └── metrics.py              # Prometheus 风格指标
+├── services/
+│   ├── code_sandbox.py         # 统一沙箱接口
+│   ├── code_executor.py        # Subprocess 执行引擎
+│   └── ast_analyzer.py         # AST 静态分析
+├── storage/
+│   └── session_store.py        # Redis / 内存存储抽象
+├── middleware/
+│   └── rate_limiter.py         # Token Bucket 限流
+├── memory/                     # 蒸馏器与面试官邮箱
+├── agents/                     # 5 位专业面试官
+├── orchestrator/               # 编排器、预算、冲突仲裁
+├── tools/                      # 工具注册与实现
+└── prompts/                    # 面试官系统提示词
 
+benchmarks/                     # 性能与沙箱基准测试
 docs/
-└── TECHNICAL.md            # 详细技术文档
+└── TECHNICAL.md                # 详细技术文档
 
-tests/                      # 测试套件（19 项测试）
+reports/
+└── BENCHMARK_20260610.md       # 量化 Benchmark 报告
+
+tests/                          # 测试套件（57+ 项测试）
 ```
 
 ---
@@ -524,9 +586,14 @@ tests/                      # 测试套件（19 项测试）
 - [x] 5 位专业面试官，独立记忆隔离
 - [x] 预算治理与冲突仲裁机制
 - [x] 可配置的面试轮次
-- [ ] 持久化会话存储（当前为内存存储）
+- [x] 异步流式 SSE + 连接池复用
+- [x] tiktoken 精确 Token 计数 + Prometheus /metrics
+- [x] 真实代码执行沙箱 + AST 静态分析
+- [x] Redis 会话持久化 + 自动故障恢复
+- [x] Token Bucket 限流保障稳定性
 - [x] Web UI 可视化面试界面
 - [x] 基线评估：单 Agent vs 多 Agent 对比
+- [ ] Docker 容器级代码沙箱
 - [ ] 支持自定义面试官人设
 
 ---

@@ -7,6 +7,7 @@ from interview_crew.agents.base import BaseAgent
 from interview_crew.protocol.schemas import AgentOutput, MemoryDistillate
 from interview_crew.state import Message, InterviewState
 from interview_crew.llm.client import llm, estimate_tokens
+from interview_crew.llm.model_resolver import get_premium_model
 
 
 class SingleInterviewAgent(BaseAgent):
@@ -18,7 +19,7 @@ class SingleInterviewAgent(BaseAgent):
 
     name = "single_interviewer"
     prompt_path = Path(__file__).parent / "prompts" / "single_agent.txt"
-    preferred_model = "qwen3.5-plus"
+    preferred_model = get_premium_model()
     default_temperature = 0.7
 
     def build_context(self, distillate: MemoryDistillate) -> str:
