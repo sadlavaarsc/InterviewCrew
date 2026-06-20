@@ -38,7 +38,7 @@
 - **🔬 Validated by A/B Testing**: MAS scores **86.2/100** vs SAS **52.5/100** (+64% lead) on role consistency, memory isolation, and technical coverage
 - **🔌 Flexible Configuration**: Enable/disable any interview round, customize turn limits per agent
 - **⚡ Dual Model Fallback**: DeepSeek primary + Ark fallback; Qwen/DashScope kept as deprecated compatibility
-- **🔥 Backend Architecture Upgrade (v0.2.0)**: Async streaming SSE, tiktoken precise token counting, Redis session persistence, Prometheus-style /metrics, token bucket rate limiting
+- **🔥 Backend Architecture Upgrade (v0.2.0)**: True async streaming SSE (`async_step()` + `async_llm.astream()`), tiktoken precise token counting, Redis session persistence, Prometheus-style /metrics, token bucket rate limiting, 18-problem sandbox + 20-case AST extended benchmark all green
 - **🧪 Single Agent Baseline**: Built-in baseline for quantitative comparison — same APIs, fair benchmark
 
 ---

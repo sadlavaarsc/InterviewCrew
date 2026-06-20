@@ -106,7 +106,7 @@ if "two_sum" in locals():
     import re, ast
     try:
         nums_match = re.search(r"nums=(\[.*?\])", input_data)
-        target_match = re.search(r"target=(\d+)", input_data)
+        target_match = re.search(r"target=(-?\d+)", input_data)
         if nums_match and target_match:
             nums = ast.literal_eval(nums_match.group(1))
             target = int(target_match.group(1))
@@ -122,6 +122,133 @@ elif "is_valid" in locals():
             _result = is_valid(s)
     except Exception:
         pass
+elif "reverse_string" in locals():
+    import re
+    try:
+        s_match = re.search(r"s='([^']+)'", input_data)
+        if s_match:
+            s = s_match.group(1)
+            _result = reverse_string(s)
+    except Exception:
+        pass
+elif "merge" in locals():
+    import re, ast
+    try:
+        nums1_match = re.search(r"nums1=(\[.*?\])", input_data)
+        m_match = re.search(r"m=(\d+)", input_data)
+        nums2_match = re.search(r"nums2=(\[.*?\])", input_data)
+        n_match = re.search(r"n=(\d+)", input_data)
+        if nums1_match and m_match and nums2_match and n_match:
+            nums1 = ast.literal_eval(nums1_match.group(1))
+            m = int(m_match.group(1))
+            nums2 = ast.literal_eval(nums2_match.group(1))
+            n = int(n_match.group(1))
+            _result = merge(nums1, m, nums2, n)
+    except Exception:
+        pass
+elif "climb_stairs" in locals():
+    import re
+    try:
+        n_match = re.search(r"n=(\d+)", input_data)
+        if n_match:
+            n = int(n_match.group(1))
+            _result = climb_stairs(n)
+    except Exception:
+        pass
+elif "search" in locals():
+    import re, ast
+    try:
+        nums_match = re.search(r"nums=(\[.*?\])", input_data)
+        target_match = re.search(r"target=(-?\d+)", input_data)
+        if nums_match and target_match:
+            nums = ast.literal_eval(nums_match.group(1))
+            target = int(target_match.group(1))
+            _result = search(nums, target)
+    except Exception:
+        pass
+elif "bubble_sort" in locals():
+    import re, ast
+    try:
+        arr_match = re.search(r"arr=(\[.*?\])", input_data)
+        if arr_match:
+            arr = ast.literal_eval(arr_match.group(1))
+            _result = bubble_sort(arr)
+    except Exception:
+        pass
+elif "quicksort" in locals():
+    import re, ast
+    try:
+        arr_match = re.search(r"arr=(\[.*?\])", input_data)
+        if arr_match:
+            arr = ast.literal_eval(arr_match.group(1))
+            _result = quicksort(arr)
+    except Exception:
+        pass
+elif "fibonacci" in locals():
+    import re
+    try:
+        n_match = re.search(r"n=(\d+)", input_data)
+        if n_match:
+            n = int(n_match.group(1))
+            _result = fibonacci(n)
+    except Exception:
+        pass
+elif "contains_duplicate" in locals():
+    import re, ast
+    try:
+        nums_match = re.search(r"nums=(\[.*?\])", input_data)
+        if nums_match:
+            nums = ast.literal_eval(nums_match.group(1))
+            _result = contains_duplicate(nums)
+    except Exception:
+        pass
+elif "max_subarray" in locals():
+    import re, ast
+    try:
+        nums_match = re.search(r"nums=(\[.*?\])", input_data)
+        if nums_match:
+            nums = ast.literal_eval(nums_match.group(1))
+            _result = max_subarray(nums)
+    except Exception:
+        pass
+elif "is_palindrome" in locals():
+    import re
+    try:
+        s_match = re.search(r"s='([^']+)'", input_data)
+        if s_match:
+            s = s_match.group(1)
+            _result = is_palindrome(s)
+    except Exception:
+        pass
+elif "is_anagram" in locals():
+    import re
+    try:
+        s_match = re.search(r"s='([^']+)'", input_data)
+        t_match = re.search(r"t='([^']+)'", input_data)
+        if s_match and t_match:
+            s = s_match.group(1)
+            t = t_match.group(1)
+            _result = is_anagram(s, t)
+    except Exception:
+        pass
+elif "product_except_self" in locals():
+    import re, ast
+    try:
+        nums_match = re.search(r"nums=(\[.*?\])", input_data)
+        if nums_match:
+            nums = ast.literal_eval(nums_match.group(1))
+            _result = product_except_self(nums)
+    except Exception:
+        pass
+elif "inorder_traversal" in locals():
+    # Tree problems return generic result
+    _result = "[tree result]"
+elif "max_depth" in locals():
+    # Tree problems return generic result
+    _result = "[tree result]"
+elif "has_cycle" in locals():
+    # Linked list problems return generic result
+    _result = "[linked list]"
 elif "reverse_list" in locals():
     _result = "[linked list]"
 

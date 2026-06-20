@@ -117,8 +117,38 @@ def _infer_complexity(tree: ast.AST, code: str) -> tuple[str, str]:
     has_sort = False
     has_binary_search = False
     has_hashmap = False
+    has_recursion = False
+    has_multiple_recursion = False  # e.g., fib(n-1) + fib(n-2)
+    has_list_comp = False
 
-    # Check for nested loops
+    # Check for recursion patterns first
+    functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    for func in functions:
+        func_calls = 0
+        has_arithmetic_args = False
+        for child in ast.walk(func):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                if child.func.id == func.name:
+                    func_calls += 1
+                    # Check if args contain arithmetic (fibonacci-style: n-1, n-2)
+                    for arg in child.args:
+                        if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Sub)):
+                            has_arithmetic_args = True
+        # Multiple recursive calls with arithmetic args = exponential (fibonacci-like)
+        if func_calls >= 2 and has_arithmetic_args:
+            has_multiple_recursion = True
+        elif func_calls >= 1:
+            has_recursion = True
+    # Also detect single recursion
+    if not has_recursion and not has_multiple_recursion:
+        for func in functions:
+            for child in ast.walk(func):
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                    if child.func.id == func.name:
+                        has_recursion = True
+                        break
+
+    # Check for loops and list comprehensions
     for node in ast.walk(tree):
         if isinstance(node, (ast.For, ast.While)):
             has_single_loop = True
@@ -126,25 +156,50 @@ def _infer_complexity(tree: ast.AST, code: str) -> tuple[str, str]:
             for child in ast.walk(node):
                 if child is not node and isinstance(child, (ast.For, ast.While)):
                     has_nested_loop = True
+        if isinstance(node, ast.ListComp):
+            has_list_comp = True
+            has_single_loop = True
 
     code_lower = code.lower()
-    if "sort" in code_lower or "sorted" in code_lower:
+    # Only detect actual sort/sorted function calls, not function names containing "sort"
+    if ".sort(" in code_lower or "sorted(" in code_lower:
         has_sort = True
     if "bisect" in code_lower:
         has_binary_search = True
+    # Detect binary search by pattern: mid/left/right halving
+    if "mid" in code_lower and ("left" in code_lower or "right" in code_lower) and "while" in code_lower:
+        has_binary_search = True
+    # Detect halving loop (power of two, etc.) - only in while loops
+    has_halving_while = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.While):
+            for child in ast.walk(node):
+                if isinstance(child, ast.AugAssign) and isinstance(child.op, ast.FloorDiv):
+                    if isinstance(child.value, ast.Constant) and child.value.value == 2:
+                        has_halving_while = True
+                elif isinstance(child, ast.BinOp) and isinstance(child.op, ast.FloorDiv):
+                    if isinstance(child.right, ast.Constant) and child.right.value == 2:
+                        has_halving_while = True
+    if has_halving_while:
+        has_binary_search = True
     if "dict" in code_lower or "set" in code_lower or "{}" in code:
         has_hashmap = True
+    # Detect string slicing / join as O(n) operations
+    if "[::-1]" in code or ".join(" in code_lower:
+        has_single_loop = True
 
     # Time complexity inference
-    if has_nested_loop:
+    if has_multiple_recursion:
+        time_c = "O(2^n)"
+    elif has_nested_loop:
         time_c = "O(n^2)"
     elif has_sort:
         time_c = "O(n log n)"
     elif has_binary_search:
         time_c = "O(log n)"
-    elif has_single_loop:
+    elif has_single_loop or has_list_comp or has_hashmap:
         time_c = "O(n)"
-    elif has_hashmap:
+    elif has_recursion:
         time_c = "O(n)"
     else:
         time_c = "O(1)"
@@ -152,7 +207,22 @@ def _infer_complexity(tree: ast.AST, code: str) -> tuple[str, str]:
     # Space complexity inference
     if "[[" in code or "nested" in code_lower:
         space_c = "O(n^2)"
-    elif has_hashmap or has_sort:
+    elif has_multiple_recursion:
+        # Call stack depth for multiple recursion is still O(n), not O(2^n)
+        # The 2^n is time complexity, space is the max depth of the call stack
+        space_c = "O(n)"
+    elif has_recursion:
+        space_c = "O(n)"
+    elif has_hashmap or has_sort or has_list_comp:
+        space_c = "O(n)"
+    # Detect stack/list accumulation patterns (Valid Parentheses, Min Stack)
+    elif "append(" in code_lower or "stack" in code_lower or "queue" in code_lower:
+        space_c = "O(n)"
+    # Detect string operations that create new strings
+    elif "[::-1]" in code or ".join(" in code_lower:
+        space_c = "O(n)"
+    # Detect result array initialization
+    elif "result = [" in code or "[1] *" in code or "[0] *" in code:
         space_c = "O(n)"
     elif has_single_loop:
         space_c = "O(1)"

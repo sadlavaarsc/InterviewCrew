@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from langchain_core.runnables import RunnableLambda, RunnableSequence
 
 from interview_crew.llm.client import llm
+from interview_crew.llm.async_client import async_llm
 from interview_crew.llm.token_counter import estimate_tokens
 from interview_crew.memory.agent_mailbox import build_agent_messages
 from interview_crew.protocol.schemas import AgentOutput, MemoryDistillate, CodingProblem, ExecutionResult, TestResult
@@ -174,7 +175,39 @@ class BaseAgent(ABC):
         business_context: str = "",
         resume_context: str = "",
     ) -> int:
+        messages = self.build_messages(
+            distillate, candidate_response, history, business_context, resume_context
+        )
+        return estimate_tokens(messages)
+
+    def build_messages(
+        self,
+        distillate: MemoryDistillate,
+        candidate_response: str,
+        history: List[Message],
+        business_context: str = "",
+        resume_context: str = "",
+    ) -> List[Dict[str, str]]:
+        """Build the message list that would be sent to the LLM."""
         agent_context = self.build_context(distillate)
         full_system = f"{self.system_prompt}\n\n【记忆摘要】\n{agent_context}"
-        messages = build_agent_messages(history, full_system, candidate_response, business_context, resume_context)
-        return estimate_tokens(messages)
+        return build_agent_messages(
+            history, full_system, candidate_response, business_context, resume_context
+        )
+
+    async def async_invoke(
+        self,
+        distillate: MemoryDistillate,
+        candidate_response: str,
+        history: List[Message],
+        business_context: str = "",
+        forced_model: Optional[str] = None,
+        resume_context: str = "",
+    ) -> AgentOutput:
+        """Async non-blocking invocation of the agent."""
+        messages = self.build_messages(
+            distillate, candidate_response, history, business_context, resume_context
+        )
+        model = forced_model or self.preferred_model or self.policy.get_models()[0]
+        raw = await async_llm.ainvoke(messages, model_name=model, temperature=self.default_temperature)
+        return self._parse_output(raw)

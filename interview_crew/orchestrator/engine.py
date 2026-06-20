@@ -1,5 +1,6 @@
+import time
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Dict
+from typing import List, Literal, Optional, Dict, AsyncGenerator
 from pathlib import Path
 
 from interview_crew.state import InterviewState, Message
@@ -12,7 +13,9 @@ from interview_crew.protocol.schemas import (
     InterviewRoundConfig,
 )
 from interview_crew.memory.distiller import distill_memory
-from interview_crew.llm.token_counter import estimate_tokens
+from interview_crew.llm.token_counter import estimate_tokens, count_string
+from interview_crew.llm.metrics import record_llm_call
+from interview_crew.llm.async_client import async_llm
 from interview_crew.llm.model_resolver import get_default_model, get_premium_model
 from interview_crew.agents import Tech1Agent, Tech2Agent, SysDesAgent, LeaderAgent, HRAgent, ScribeAgent
 from interview_crew.orchestrator.budget_guardian import BudgetGuardian
@@ -148,6 +151,21 @@ class Orchestrator:
             total_flash_token_consumed=self._total_flash_token_consumed,
         )
 
+    def _record_llm_call_safe(
+        self,
+        model: str,
+        latency: float,
+        input_tokens: int,
+        output_text: str,
+    ) -> None:
+        """Safely record LLM metrics, swallowing any metric errors."""
+        try:
+            output_tokens = count_string(output_text) if output_text else 0
+            record_llm_call(model, latency, input_tokens, output_tokens)
+        except Exception:
+            # Metrics must never break the interview flow.
+            pass
+
     def _get_current_round_index(self) -> int:
         """Get the index of current agent in enabled rounds."""
         if not self.state.current_agent:
@@ -266,6 +284,361 @@ class Orchestrator:
 
         # 6. 执行正常 turn
         return self._execute_turn(current_agent, sub_stage, candidate_response)
+
+    async def async_step(self, candidate_response: str) -> AsyncGenerator[StepResult, None]:
+        """Async streaming version of step().
+
+        Mirrors step() logic but streams LLM tokens. Yields intermediate
+        StepResult objects with partial question text, followed by a final
+        StepResult when the response is complete.
+        """
+        self.state.candidate_response = candidate_response
+
+        # 0. Initialize current agent
+        if not self.state.current_agent:
+            if self._enabled_rounds:
+                self.state.current_agent = self._enabled_rounds[0]
+                self.state.current_round_index = 1
+            else:
+                yield self._finish_interview()
+                return
+
+        # 1. Determine current state
+        current_agent = self.state.current_agent
+        sub_stage = self._get_current_sub_stage(current_agent)
+
+        # 2. Unified quota check
+        quota_result = self._quota.check_and_consume(current_agent, sub_stage)
+
+        # 3. Record turn
+        self.state.turn += 1
+        if candidate_response:
+            self.state.append_unified({"role": "user", "content": candidate_response})
+
+        # 4. Handle quota exhausted
+        if not quota_result.can_continue:
+            yield self._handle_quota_exhausted(quota_result, candidate_response)
+            return
+
+        # Extra global check
+        remaining = self._quota.get_remaining(current_agent)
+        if remaining.get("global", 0) <= 0:
+            yield self._finish_interview()
+            return
+
+        # Extra agent check
+        if remaining.get("agent", 0) <= 0 and sub_stage in [None, "done"]:
+            yield self._handle_quota_exhausted(
+                QuotaCheckResult(
+                    can_continue=False,
+                    exhausted_level=QuotaLevel.AGENT,
+                    action=QuotaAction.SWITCH_AGENT,
+                    reason=f"Agent {current_agent} quota exhausted after this turn",
+                ),
+                candidate_response,
+            )
+            return
+
+        # 5. Update per-round counts
+        if current_agent and current_agent in self._enabled_rounds:
+            self._round_turn_counts[current_agent] = self._round_turn_counts.get(current_agent, 0) + 1
+            self.state.round_turn_counts = self._round_turn_counts
+
+        # 6. Execute turn asynchronously with streaming
+        async for result in self._execute_turn_async(current_agent, sub_stage, candidate_response):
+            yield result
+
+    async def _execute_turn_async(
+        self,
+        agent: str,
+        sub_stage: Optional[str],
+        candidate_response: str,
+    ) -> AsyncGenerator[StepResult, None]:
+        """Async version of _execute_turn."""
+        if agent in ["tech1", "tech2"]:
+            if sub_stage == "done":
+                yield self._handle_agent_round_complete(agent, candidate_response)
+                return
+            elif sub_stage:
+                async for result in self._process_tech_agent_sub_stage_async(agent, candidate_response):
+                    yield result
+                return
+            else:
+                async for result in self._process_standard_agent_async(agent, candidate_response):
+                    yield result
+                return
+        elif agent == "scribe":
+            yield self._finish_interview()
+            return
+        else:
+            async for result in self._process_standard_agent_async(agent, candidate_response):
+                yield result
+                return
+
+    async def _process_standard_agent_async(
+        self,
+        agent_name: str,
+        candidate_response: str,
+    ) -> AsyncGenerator[StepResult, None]:
+        """Async streaming version of _process_standard_agent."""
+        # Distill memory
+        memory_distillate = distill_memory(
+            self.state.unified_history,
+            self.state.session_id,
+            self.state.turn,
+        )
+
+        # Budget check
+        agent = self.agents[agent_name]
+        estimated = agent.estimate_tokens(
+            memory_distillate,
+            candidate_response,
+            self.state.get_agent_history(agent_name),
+            business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
+        )
+        forced_model = self.budget_guardian.check_and_downgrade(agent_name, estimated)
+        model_used = forced_model or agent.preferred_model
+
+        # Stream LLM response
+        messages = agent.build_messages(
+            memory_distillate,
+            candidate_response,
+            self.state.get_agent_history(agent_name),
+            business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
+        )
+
+        partial_raw = ""
+        start_time = time.perf_counter()
+        async for chunk in async_llm.astream(messages, model_name=model_used, temperature=agent.default_temperature):
+            partial_raw += chunk
+            yield self._build_step_result(
+                agent=agent_name,
+                question=partial_raw,
+                finished=False,
+                estimated_tokens=estimated,
+                model_used=model_used,
+            )
+        latency = time.perf_counter() - start_time
+        self._record_llm_call_safe(model_used, latency, estimate_tokens(messages), partial_raw)
+
+        # Parse output
+        output = agent._parse_output({"raw": partial_raw})
+
+        # Record budget
+        self.budget_guardian.consume(estimated)
+        self.state.total_budget_consumed += estimated
+
+        # Update histories
+        assistant_msg: Message = {
+            "role": "assistant",
+            "name": agent_name,
+            "content": output.question,
+        }
+        self.state.append_agent_history(agent_name, assistant_msg)
+        self.state.append_unified(assistant_msg)
+        self.state.last_question = output.question
+
+        # Update competency history
+        for tag in memory_distillate.competency_vector:
+            self.state.competency_history.append({
+                "dimension": tag.dimension,
+                "score": tag.score,
+                "turn": self.state.turn,
+                "agent": agent_name,
+            })
+
+        # Conflict detection
+        conflict = self.conflict_arbitrator.detect_conflict(self.state.competency_history)
+        if conflict:
+            self.state.conflict_flag = True
+            memory_distillate.contradiction_alerts.append(conflict)
+
+        # Build TransferPackage
+        pkg = TransferPackage(
+            session_id=self.state.session_id,
+            from_agent=agent_name,
+            to_agent=self._peek_next_agent(agent_name),
+            round_completed=self.state.turn,
+            distillate=memory_distillate,
+            raw_digest=self._digest(candidate_response, output.question),
+            budget_consumed=estimated,
+            challenge_flags=[conflict] if conflict else [],
+            agent_question=output.question,
+            evaluation_score=output.evaluation_score,
+        )
+        self.state.transfer_queue.append(pkg)
+
+        yield self._build_step_result(
+            agent=agent_name,
+            question=output.question,
+            finished=False,
+            estimated_tokens=estimated,
+            model_used=model_used,
+        )
+
+    async def _process_tech_agent_sub_stage_async(
+        self,
+        agent_name: str,
+        candidate_response: str,
+    ) -> AsyncGenerator[StepResult, None]:
+        """Async streaming version of _process_tech_agent_sub_stage."""
+        agent = self.agents[agent_name]
+        sub_stage = self.state.get_sub_stage(agent_name)
+
+        # Distill memory
+        memory_distillate = distill_memory(
+            self.state.unified_history,
+            self.state.session_id,
+            self.state.turn,
+        )
+
+        # Build context based on sub-stage
+        if sub_stage == "chat":
+            context = agent.build_context(memory_distillate)
+        elif sub_stage == "coding":
+            context = agent.build_coding_context(memory_distillate, self.state)
+            if self.state.get_stage_turns(agent_name) == 0:
+                difficulty = "easy" if agent_name == "tech1" else "medium"
+                problem = agent.generate_coding_problem(memory_distillate, difficulty)
+                if problem is None:
+                    self.state.current_coding_task = None
+                elif hasattr(problem, "model_dump"):
+                    self.state.current_coding_task = problem.model_dump()
+                else:
+                    self.state.current_coding_task = problem.to_dict()
+        elif sub_stage == "reflect":
+            context = agent.build_reflect_context(memory_distillate, self.state)
+            self.state.current_coding_task = None
+        else:
+            context = agent.build_context(memory_distillate)
+
+        # Budget check
+        estimated = agent.estimate_tokens(
+            memory_distillate,
+            candidate_response,
+            self.state.get_agent_history(agent_name),
+            business_context=self._business_context_text(),
+            resume_context=self.state.resume_text,
+        )
+        forced_model = self.budget_guardian.check_and_downgrade(agent_name, estimated)
+        model_used = forced_model or agent.preferred_model
+
+        # Build messages
+        from interview_crew.memory.agent_mailbox import build_agent_messages
+        messages = build_agent_messages(
+            self.state.get_agent_history(agent_name),
+            f"{agent.system_prompt}\n\n【当前阶段】\n{context}",
+            candidate_response,
+            self._business_context_text(),
+            self.state.resume_text,
+        )
+
+        # Stream LLM response
+        partial_raw = ""
+        start_time = time.perf_counter()
+        async for chunk in async_llm.astream(messages, model_name=model_used, temperature=agent.default_temperature):
+            partial_raw += chunk
+            yield self._build_step_result(
+                agent=agent_name,
+                question=partial_raw,
+                finished=False,
+                estimated_tokens=estimated,
+                model_used=model_used,
+            )
+        latency = time.perf_counter() - start_time
+        self._record_llm_call_safe(model_used, latency, estimate_tokens(messages), partial_raw)
+
+        # Parse output
+        try:
+            import json
+            data = json.loads(partial_raw.strip())
+            from interview_crew.protocol.schemas import TestCase, CodingProblem
+            if "coding_problem" in data and data["coding_problem"]:
+                problem_data = data["coding_problem"]
+                test_cases = [TestCase(**tc) if isinstance(tc, dict) else tc for tc in problem_data.get("test_cases", [])]
+                problem_data["test_cases"] = test_cases
+                data["coding_problem"] = CodingProblem(**problem_data)
+                self.state.current_coding_task = data["coding_problem"].model_dump()
+            from interview_crew.protocol.schemas import AgentOutput
+            output = AgentOutput(**data)
+        except Exception as e:
+            from interview_crew.protocol.schemas import AgentOutput
+            output = AgentOutput(
+                question=partial_raw.strip(),
+                evaluation_score=0.5,
+                key_weaknesses=[],
+                follow_up_candidates=[],
+                reasoning=f"parse error: {str(e)}",
+            )
+
+        # Record budget
+        self.budget_guardian.consume(estimated)
+        self.state.total_budget_consumed += estimated
+
+        # Update histories
+        assistant_msg: Message = {
+            "role": "assistant",
+            "name": agent_name,
+            "content": output.question,
+        }
+        self.state.append_agent_history(agent_name, assistant_msg)
+        self.state.append_unified(assistant_msg)
+        self.state.last_question = output.question
+
+        # Update competency history
+        for tag in memory_distillate.competency_vector:
+            self.state.competency_history.append({
+                "dimension": tag.dimension,
+                "score": tag.score,
+                "turn": self.state.turn,
+                "agent": agent_name,
+            })
+
+        # Update sub-stage turn counter
+        self.state.increment_stage_turns(agent_name)
+
+        # Check if should advance sub-stage
+        round_config = self.state.config.get_round_config(agent_name)
+        stage_turns = self.state.get_stage_turns(agent_name)
+
+        if sub_stage == "chat" and stage_turns >= round_config.max_chat_turns:
+            self.state.advance_sub_stage(agent_name)
+        elif sub_stage == "coding":
+            max_coding = getattr(round_config, 'max_coding_turns', 5)
+            if stage_turns >= max_coding:
+                self.state.advance_sub_stage(agent_name)
+        elif sub_stage == "reflect" and stage_turns >= round_config.max_reflect_turns:
+            self.state.advance_sub_stage(agent_name)
+
+        # Build TransferPackage
+        conflict = self.conflict_arbitrator.detect_conflict(self.state.competency_history)
+        if conflict:
+            self.state.conflict_flag = True
+            memory_distillate.contradiction_alerts.append(conflict)
+
+        pkg = TransferPackage(
+            session_id=self.state.session_id,
+            from_agent=agent_name,
+            to_agent=self._peek_next_agent(agent_name),
+            round_completed=self.state.turn,
+            distillate=memory_distillate,
+            raw_digest=self._digest(candidate_response, output.question),
+            budget_consumed=estimated,
+            challenge_flags=[conflict] if conflict else [],
+            agent_question=output.question,
+            evaluation_score=output.evaluation_score,
+        )
+        self.state.transfer_queue.append(pkg)
+
+        yield self._build_step_result(
+            agent=agent_name,
+            question=output.question,
+            finished=False,
+            estimated_tokens=estimated,
+            model_used=model_used,
+        )
 
     def _get_current_sub_stage(self, agent: str) -> Optional[str]:
         """获取当前 sub-stage（如果有）"""
@@ -463,7 +836,11 @@ class Orchestrator:
 
         # Invoke LLM
         from interview_crew.llm.client import llm
-        raw = llm.invoke(messages, model_name=forced_model or agent.preferred_model, temperature=agent.default_temperature)
+        model_used = forced_model or agent.preferred_model
+        start_time = time.perf_counter()
+        raw = llm.invoke(messages, model_name=model_used, temperature=agent.default_temperature)
+        latency = time.perf_counter() - start_time
+        self._record_llm_call_safe(model_used, latency, estimate_tokens(messages), raw)
 
         # Parse output
         try:
@@ -579,6 +956,8 @@ class Orchestrator:
         forced_model = self.budget_guardian.check_and_downgrade(agent_name, estimated)
 
         # Invoke agent
+        model_used = forced_model or agent.preferred_model
+        start_time = time.perf_counter()
         output = agent.invoke(
             memory_distillate,
             candidate_response,
@@ -587,6 +966,8 @@ class Orchestrator:
             forced_model=forced_model,
             resume_context=self.state.resume_text,
         )
+        latency = time.perf_counter() - start_time
+        self._record_llm_call_safe(model_used, latency, estimated, output.question)
 
         # Record budget
         self.budget_guardian.consume(estimated)
@@ -800,6 +1181,7 @@ class Orchestrator:
         # Scribe uses default (economy) model
         model_used = get_default_model()
 
+        start_time = time.perf_counter()
         output = scribe.invoke(
             synthetic_distillate,
             candidate_response=full_context,  # 传递完整的上下文作为 candidate_response
@@ -808,6 +1190,8 @@ class Orchestrator:
             resume_context=self.state.resume_text,
             forced_model=model_used,
         )
+        latency = time.perf_counter() - start_time
+        self._record_llm_call_safe(model_used, latency, estimated, output.question)
 
         # Record scribe interaction
         assistant_msg: Message = {

@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 import asyncio
 from pathlib import Path
@@ -20,6 +21,7 @@ from interview_crew.llm.metrics import (
     get_metrics_content_type,
     set_active_sessions,
     record_turn,
+    record_session_duration,
 )
 from interview_crew.storage.session_store import get_session_store
 from interview_crew.middleware.rate_limiter import RateLimitMiddleware
@@ -32,6 +34,7 @@ app.add_middleware(RateLimitMiddleware)
 
 # In-memory session storage (orchestrator cache)
 _sessions: Dict[str, OrchestratorType] = {}
+_session_start_times: Dict[str, float] = {}
 _session_store = get_session_store()
 
 
@@ -337,12 +340,44 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         orchestrator = Orchestrator(state)
 
     _sessions[session_id] = orchestrator
+    _session_start_times[session_id] = time.time()
     # Save to persistent store
     try:
         _session_store.save(session_id, state.to_json())
     except Exception:
         pass
     return CreateSessionResponse(session_id=session_id, status=state.status, mode=req.mode)
+
+
+def _record_session_duration_if_finished(session_id: str, finished: bool) -> None:
+    """Record session duration and cleanup tracking when interview finishes."""
+    if not finished:
+        return
+    start_time = _session_start_times.pop(session_id, None)
+    if start_time is not None:
+        try:
+            record_session_duration(time.time() - start_time)
+        except Exception:
+            pass
+    try:
+        _session_store.delete(session_id)
+    except Exception:
+        pass
+
+
+async def _cleanup_expired_sessions_loop(interval_seconds: int = 300) -> None:
+    """Background task that periodically removes expired sessions from memory."""
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            removed = _session_store.cleanup_expired()
+            if removed > 0:
+                print(f"[Cleanup] Removed {removed} expired sessions from store")
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            # Background cleanup must never crash the server.
+            pass
 
 
 @app.post("/sessions/{session_id}/step", response_model=StepResponse)
@@ -352,6 +387,7 @@ def step(session_id: str, req: StepRequest) -> StepResponse:
         raise HTTPException(status_code=404, detail="Session not found")
     result: StepResult = orchestrator.step(req.candidate_response)
     record_turn(result.agent)
+    _record_session_duration_if_finished(session_id, result.finished)
     # Persist session state
     try:
         _session_store.save(session_id, orchestrator.state.to_json())
@@ -378,9 +414,46 @@ async def _stream_step_internal(session_id: str, candidate_response: str):
     if orchestrator is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    has_async_step = hasattr(orchestrator, "async_step")
+
     async def event_generator():
-        result: StepResult = orchestrator.step(candidate_response)
-        record_turn(result.agent)
+        final_result: Optional[StepResult] = None
+
+        if has_async_step:
+            # True async token streaming
+            async for result in orchestrator.async_step(candidate_response):
+                final_result = result
+                yield {
+                    "event": "token",
+                    "data": json.dumps({
+                        "token": result.question,
+                        "agent": result.agent,
+                        "finished": result.finished,
+                    })
+                }
+        else:
+            # Fallback: synchronous step then chunk the final text
+            result: StepResult = orchestrator.step(candidate_response)
+            final_result = result
+            text = result.question
+            chunk_size = 2
+            for i in range(0, len(text), chunk_size):
+                chunk = text[i:i + chunk_size]
+                yield {
+                    "event": "token",
+                    "data": json.dumps({
+                        "token": chunk,
+                        "agent": result.agent,
+                        "finished": result.finished,
+                    })
+                }
+                await asyncio.sleep(0.015)
+
+        if final_result is None:
+            return
+
+        record_turn(final_result.agent)
+        _record_session_duration_if_finished(session_id, final_result.finished)
 
         # Persist state
         try:
@@ -388,29 +461,15 @@ async def _stream_step_internal(session_id: str, candidate_response: str):
         except Exception:
             pass
 
-        text = result.question
-        chunk_size = 2
-        for i in range(0, len(text), chunk_size):
-            chunk = text[i:i + chunk_size]
-            yield {
-                "event": "token",
-                "data": json.dumps({
-                    "token": chunk,
-                    "agent": result.agent,
-                    "finished": result.finished,
-                })
-            }
-            await asyncio.sleep(0.015)
-
         yield {
             "event": "done",
             "data": json.dumps({
-                "agent": result.agent,
-                "question": result.question,
-                "finished": result.finished,
-                "report": result.report,
-                "token_consumed_this_turn": result.token_consumed_this_turn,
-                "total_token_consumed": result.total_token_consumed,
+                "agent": final_result.agent,
+                "question": final_result.question,
+                "finished": final_result.finished,
+                "report": final_result.report,
+                "token_consumed_this_turn": final_result.token_consumed_this_turn,
+                "total_token_consumed": final_result.total_token_consumed,
             })
         }
 
@@ -661,6 +720,7 @@ def startup_event():
                         else:
                             orch = Orchestrator(state)
                         _sessions[sid] = orch
+                        _session_start_times[sid] = time.time()
                         recovered += 1
             except Exception:
                 continue
@@ -668,3 +728,9 @@ def startup_event():
             print(f"[Startup] Recovered {recovered} active sessions from store")
     except Exception as e:
         print(f"[Startup] Session recovery skipped: {e}")
+
+    # Start background cleanup task for in-memory expired sessions.
+    try:
+        asyncio.create_task(_cleanup_expired_sessions_loop())
+    except Exception:
+        pass

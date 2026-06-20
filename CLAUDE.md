@@ -70,8 +70,17 @@ docs/TECHNICAL.md      # 详细技术文档
 ## 常用命令
 
 ```bash
-# 运行测试
+# 运行测试（当前 100 个测试全绿）
 conda activate agentEnv && pytest tests/ -v
+
+# 运行沙箱/AST benchmark（零成本，100% 通过）
+conda activate agentEnv && python -m benchmarks.sandbox_benchmark
+
+# 运行性能 benchmark（离线模式使用模拟 TTFT）
+conda activate agentEnv && python -m benchmarks.performance_benchmark --offline
+
+# 真实 TTFT 压测（需配置 DEEPSEEK_API_KEY）
+conda activate agentEnv && python -m benchmarks.real_latency_benchmark
 
 # 创建会话（API）
 curl -X POST http://localhost:8000/sessions \
@@ -81,6 +90,19 @@ curl -X POST http://localhost:8000/sessions \
 # 查询会话状态
 curl http://localhost:8000/sessions/{session_id}
 ```
+
+---
+
+## 测试与 Benchmark 状态
+
+| 模块 | 状态 | 备注 |
+|------|------|------|
+| 单元测试 | ✅ 100/100 通过 | 含新增限流器、Redis、真流式测试 |
+| 代码沙箱 | ✅ 18/18 通过 | subprocess 执行，Docker fallback 已实现 |
+| AST 复杂度 | ✅ 38/38 100% | 18 道沙箱题 + 20 组扩展用例 |
+| 安全过滤 | ✅ 6/6 拦截 | 正则静态过滤 |
+| TTFT | ⚠️ 离线模拟 | 配置 API key 后运行 `real_latency_benchmark.py` 可补实测 |
+| 并发压测 | ✅ 历史 100 并发通过 | DeepSeek API，服务端 0 错误 |
 
 ---
 

@@ -38,7 +38,7 @@
 - **🔬 A/B 测试验证**：MAS 综合评分 **86.2/100** 对比 SAS **52.5/100**，领先 **64%**（角色一致性、记忆隔离、技术覆盖全面领先）
 - **🔌 灵活配置**：可自由启用/禁用任意面试轮次，自定义每轮最大回合数
 - **⚡ 双模型容错**：DeepSeek 主模型 + Ark 故障转移；Qwen/DashScope 已标记为废弃但保留兼容
-- **🔥 后端架构升级 (v0.2.0)**：异步流式 SSE、tiktoken 精确 token 计数、Redis 会话持久化、Prometheus 风格 /metrics、Token Bucket 限流
+- **🔥 后端架构升级 (v0.2.0)**：真异步流式 SSE（`async_step()` + `async_llm.astream()`）、tiktoken 精确 token 计数、Redis 会话持久化、Prometheus 风格 /metrics、Token Bucket 限流、18 题沙箱 + 20 组 AST 扩展 benchmark 全绿
 - **🧪 单 Agent Baseline**：内置量化对比基线 —— 相同 API、公平对比、数据说话
 
 ---

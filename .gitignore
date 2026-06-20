@@ -27,3 +27,4 @@ venv/
 claude.md
 INTERNAL_*.md
 *.log
+.benchmark_cache/

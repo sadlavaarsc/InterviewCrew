@@ -4,8 +4,11 @@ Supports Redis (production) and in-memory (dev/fallback) backends.
 """
 
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
+
+import redis as redis_lib
 
 from interview_crew.config import settings
 
@@ -33,24 +36,40 @@ class SessionStore(ABC):
         """List all active session IDs."""
         raise NotImplementedError
 
+    @abstractmethod
+    def cleanup_expired(self, max_age_seconds: int = 86400) -> int:
+        """Remove sessions older than max_age_seconds. Returns count removed."""
+        raise NotImplementedError
+
 
 class MemorySessionStore(SessionStore):
     """In-memory session store (backward compatible)."""
 
     def __init__(self):
-        self._data: dict[str, str] = {}
+        self._data: dict[str, tuple[str, float]] = {}
 
     def save(self, session_id: str, state_json: str) -> None:
-        self._data[session_id] = state_json
+        self._data[session_id] = (state_json, time.time())
 
     def load(self, session_id: str) -> Optional[str]:
-        return self._data.get(session_id)
+        item = self._data.get(session_id)
+        return item[0] if item else None
 
     def delete(self, session_id: str) -> None:
         self._data.pop(session_id, None)
 
     def list_active(self) -> list[str]:
         return list(self._data.keys())
+
+    def cleanup_expired(self, max_age_seconds: int = 86400) -> int:
+        now = time.time()
+        expired = [
+            sid for sid, (_, created_at) in self._data.items()
+            if now - created_at > max_age_seconds
+        ]
+        for sid in expired:
+            self._data.pop(sid, None)
+        return len(expired)
 
 
 class RedisSessionStore(SessionStore):
@@ -87,6 +106,10 @@ class RedisSessionStore(SessionStore):
         keys = self._client.keys(pattern)
         return [k.replace(self._prefix, "") for k in keys]
 
+    def cleanup_expired(self, max_age_seconds: int = 86400) -> int:
+        # Redis uses TTL per key; no manual cleanup required.
+        return 0
+
 
 # Singleton instance
 _session_store_instance: Optional[SessionStore] = None
@@ -105,9 +128,7 @@ def get_session_store() -> SessionStore:
     redis_url = getattr(settings, "redis_url", None)
     if redis_url:
         try:
-            import redis as redis_lib
             parsed = redis_lib.from_url(redis_url)
-            info = parsed.info()
             _session_store_instance = RedisSessionStore(
                 host=getattr(parsed, "host", "localhost"),
                 port=getattr(parsed, "port", 6379),

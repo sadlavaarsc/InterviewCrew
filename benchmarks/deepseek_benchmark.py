@@ -3,12 +3,13 @@ DeepSeek API benchmark: TTFT + concurrent throughput.
 Models: deepseek-v4-pro (500 concurrency) / deepseek-v4-flash (2500 concurrency)
 """
 import asyncio
+import os
 import time
 import statistics
 from typing import List, Dict
 from openai import AsyncOpenAI
 
-API_KEY = "sk-66605c9aae5242cdaf680711bdfba354"
+API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 BASE_URL = "https://api.deepseek.com"
 
 TEST_MESSAGES = [
@@ -156,6 +157,12 @@ async def run_all():
     print("DeepSeek API Benchmark (Real Calls)")
     print(f"API: {BASE_URL}")
     print("=" * 60)
+
+    if not API_KEY:
+        print("\nError: DEEPSEEK_API_KEY environment variable is not set.")
+        print("Set it with: export DEEPSEEK_API_KEY=sk-...")
+        print("Skipping benchmark (no real API calls will be made).")
+        return {}
 
     client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 
